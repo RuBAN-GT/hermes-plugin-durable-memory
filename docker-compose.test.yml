@@ -1,0 +1,18 @@
+name: durable-memory-test
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: durable_memory
+      POSTGRES_PASSWORD: durable_memory
+      POSTGRES_DB: durable_memory_test
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U durable_memory -d durable_memory_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+    tmpfs:
+      - /var/lib/postgresql

@@ -1,0 +1,7 @@
+name: durable-memory
+version: 0.1.0
+description: Namespaced, approval-gated Hermes memory with a PostgreSQL-ready record model.
+author: Hermes Durable Memory contributors
+api_version: 1
+capabilities:
+  - gateway.human_decisions

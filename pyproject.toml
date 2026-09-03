@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-plugin-durable-memory"
+version = "0.1.0"
+description = "Namespaced, approval-gated Hermes memory with a PostgreSQL-ready record model."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Hermes Durable Memory contributors" }]
+keywords = [
+    "hermes-agent",
+    "hermes-plugin",
+    "memory",
+    "postgres",
+    "approval",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = ["psycopg[binary]>=3.2,<4"]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.8"]
+
+[project.entry-points."hermes_agent.memory_providers"]
+durable-memory = "hermes_durable_memory.plugin:register"
+
+[tool.setuptools.packages.find]
+include = ["hermes_durable_memory*"]
+
+[tool.setuptools.package-data]
+hermes_durable_memory = ["sql/*.sql"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+extend-exclude = ["build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"hermes_durable_memory/i18n.py" = ["E501"]
