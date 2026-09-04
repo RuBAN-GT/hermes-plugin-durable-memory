@@ -73,6 +73,10 @@ class DatabaseMigrator:
             ) from error
         applied: list[dict[str, object]] = []
         with psycopg.connect(self._database_url) as connection:
+            connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtext('durable_memory.schema_migration'))"
+            )
+            self._validate_applied(connection, migrations)
             for migration in migrations:
                 existing = self._existing(connection, migration.version)
                 if existing:
@@ -90,6 +94,34 @@ class DatabaseMigrator:
                 )
                 applied.append({"version": migration.version, "name": migration.name})
         return applied
+
+    @staticmethod
+    def _validate_applied(connection, migrations: list[Migration]) -> None:
+        """Fail closed for a divergent or newer installed migration history."""
+        exists = connection.execute(
+            "SELECT to_regclass('durable_memory.schema_migration')"
+        ).fetchone()[0]
+        if not exists:
+            return
+        rows = connection.execute(
+            "SELECT version, checksum FROM durable_memory.schema_migration ORDER BY version"
+        ).fetchall()
+        known = {migration.version: migration for migration in migrations}
+        applied_versions = [row[0] for row in rows]
+        unknown = [version for version in applied_versions if version not in known]
+        if unknown:
+            raise CommandError(
+                "Database has migration versions unknown to this binary: "
+                + ", ".join(str(version) for version in unknown)
+            )
+        expected_applied = list(range(1, (applied_versions[-1] if rows else 0) + 1))
+        if applied_versions != expected_applied:
+            raise CommandError("Applied migration versions must be contiguous.")
+        for version, checksum in rows:
+            if checksum != known[version].checksum:
+                raise CommandError(
+                    f"Migration {version} has changed after application."
+                )
 
     def bootstrap_profile(self, slug: str, runtime_role: str) -> dict[str, str]:
         if not slug or not runtime_role:
@@ -155,4 +187,6 @@ class DatabaseMigrator:
         versions = [item.version for item in migrations]
         if len(set(versions)) != len(versions):
             raise CommandError("Migration versions must be unique.")
+        if versions != list(range(1, len(versions) + 1)):
+            raise CommandError("Migration versions must be contiguous starting at 1.")
         return migrations

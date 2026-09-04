@@ -5,10 +5,39 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from hermes_durable_memory.config import Settings
+from hermes_durable_memory.models import CommandError
 from hermes_durable_memory.ollama import OllamaConfig, OllamaEmbeddingClient
 
 
 class OllamaEmbeddingTests(unittest.TestCase):
+    def test_settings_require_explicit_store_and_profile(self) -> None:
+        for environment in (
+            {},
+            {"DURABLE_MEMORY_STORE": "memory"},
+            {"DURABLE_MEMORY_PROFILE": "alpha"},
+            {"DURABLE_MEMORY_STORE": "postgres", "HERMES_PROFILE": "alpha"},
+        ):
+            with self.assertRaises(CommandError):
+                Settings.from_env(environment)
+
+    def test_settings_reject_conflicting_profiles_and_redacts_urls(self) -> None:
+        with self.assertRaises(CommandError):
+            Settings.from_env(
+                {
+                    "DURABLE_MEMORY_STORE": "memory",
+                    "DURABLE_MEMORY_PROFILE": "alpha",
+                    "HERMES_PROFILE": "beta",
+                }
+            )
+        settings = Settings.from_env(
+            {
+                "DURABLE_MEMORY_STORE": "postgres",
+                "DURABLE_MEMORY_PROFILE": "alpha",
+                "DURABLE_MEMORY_DATABASE_URL": "postgresql://user:secret@example.test/db",
+            }
+        )
+        self.assertNotIn("secret", repr(settings))
+
     def test_disabled_configuration_fails_closed_without_network(self) -> None:
         client = OllamaEmbeddingClient(OllamaConfig())
         with patch("hermes_durable_memory.ollama.urlopen") as urlopen:
@@ -37,13 +66,21 @@ class OllamaEmbeddingTests(unittest.TestCase):
     def test_settings_enable_only_the_ollama_provider(self) -> None:
         settings = Settings.from_env(
             {
+                "DURABLE_MEMORY_STORE": "memory",
+                "DURABLE_MEMORY_PROFILE": "test",
                 "DURABLE_MEMORY_EMBEDDING_PROVIDER": "ollama",
                 "DURABLE_MEMORY_OLLAMA_BASE_URL": "http://localhost:11434",
                 "DURABLE_MEMORY_OLLAMA_MODEL": "model",
             }
         )
         self.assertTrue(OllamaEmbeddingClient.from_settings(settings).config.enabled)
-        disabled = Settings.from_env({"DURABLE_MEMORY_EMBEDDING_PROVIDER": "other"})
+        disabled = Settings.from_env(
+            {
+                "DURABLE_MEMORY_STORE": "memory",
+                "DURABLE_MEMORY_PROFILE": "test",
+                "DURABLE_MEMORY_EMBEDDING_PROVIDER": "other",
+            }
+        )
         self.assertFalse(OllamaEmbeddingClient.from_settings(disabled).config.enabled)
 
 

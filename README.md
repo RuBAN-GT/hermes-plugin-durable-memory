@@ -69,6 +69,18 @@ flowchart LR
    until a human decides.
 4. PostgreSQL row-level security binds the runtime database role to one profile.
 
+### Optional skill extractors
+
+Skills may act as candidate extractors. They receive only an explicit, bounded
+`TurnContext` supplied by Hermes and return `MemoryCandidate` objects with
+evidence. They are not memory writers: extractors do not receive a store,
+approval queue, SQL connection, canonical records, or implicit chat history.
+
+The default configuration has no extractors, so provider turn sync is a no-op.
+When configured, the provider submits valid candidates through the same
+approval policy as every other write. Turn context and raw dialogue are
+transient and are never persisted automatically.
+
 ## Install in Hermes
 
 Install the plugin into the Python environment used by the Hermes CLI or
@@ -138,14 +150,17 @@ For durable, cross-session memory, switch to PostgreSQL. See
 | PostgreSQL repository | Implemented, with versioned migrations |
 | Isolation | RLS binds a runtime role to one Hermes profile |
 | Inventories | Dynamic records; no schema migration to add a type |
-| Search | PostgreSQL FTS on `search_text` and identity, plus JSON filters |
-| Ollama | Optional `POST /api/embed` adapter; embeddings are not stored |
-| Vector / hybrid retrieval | Not implemented |
+| Search | Bounded FTS with optional PostgreSQL vector/FTS rank fusion |
+| Ollama | Optional `POST /api/embed` adapter for explicit projection indexing and query embedding |
+| Vector / hybrid retrieval | pgvector projection with durable pending jobs; FTS remains the fallback |
 | Telegram approval | Session-bound human decisions after capability consent |
 | In-memory backend | Available for unit tests and local development |
+| Candidate conflicts | Exact identity is authoritative; optional PostgreSQL semantic assessment stores only duplicate/conflict metadata and reviewable relations |
+| Lifecycle | Validity windows retain records, revisions, candidates, and evidence after expiry |
 
-The Ollama adapter uses Python's standard library only. If it is missing,
-misconfigured, or unreachable, ordinary memory operations still work.
+The Ollama adapter uses Python's standard library only. Embeddings are a
+rebuildable projection, never canonical memory payloads. If Ollama is missing,
+misconfigured, or unreachable, writes and FTS retrieval still work.
 
 ## Local installation
 
@@ -188,6 +203,24 @@ DURABLE_MEMORY_OLLAMA_TIMEOUT_SECONDS=10
 
 ## PostgreSQL setup
 
+The migration owner needs a PostgreSQL deployment with the `vector` extension
+available. Migration `0006_vector_projection.sql` runs `CREATE EXTENSION vector`;
+provision pgvector in managed PostgreSQL before running it. The projection
+supports multiple embedding models, so it does not create one invalid HNSW index
+across mixed vector dimensions. After selecting a model and dimension, the
+operator may add an appropriate partial cosine HNSW index, for example:
+
+```sql
+CREATE INDEX record_embedding_nomic_hnsw ON durable_memory.record_embedding
+USING hnsw ((embedding::vector(768)) vector_cosine_ops)
+WHERE lifecycle_status = 'indexed' AND model_identifier = 'nomic-embed-text';
+```
+
+Migration `0006_vector_projection.sql` also uses the standard `pgcrypto`
+extension to derive SHA-256 projection content hashes. The runtime role only
+needs the projection/job privileges below when an explicit embedding worker is
+used.
+
 Start the local test database, then apply migrations:
 
 ```bash
@@ -206,15 +239,59 @@ GRANT USAGE ON SCHEMA durable_memory TO <runtime-role>;
 GRANT SELECT ON durable_memory.profile TO <runtime-role>;
 GRANT SELECT, INSERT, UPDATE ON durable_memory.namespace TO <runtime-role>;
 GRANT SELECT, INSERT, DELETE ON durable_memory.namespace_grant TO <runtime-role>;
-GRANT SELECT, INSERT, UPDATE ON durable_memory.record TO <runtime-role>;
-GRANT SELECT, INSERT ON durable_memory.record_revision TO <runtime-role>;
-GRANT SELECT, INSERT, UPDATE ON durable_memory.change_request TO <runtime-role>;
+GRANT SELECT ON durable_memory.memory_type, durable_memory.memory_schema_version,
+  durable_memory.inventory_definition TO <runtime-role>;
+GRANT SELECT, INSERT ON durable_memory.memory_candidate TO <runtime-role>;
+GRANT SELECT, INSERT ON durable_memory.memory_evidence TO <runtime-role>;
+GRANT SELECT, INSERT ON durable_memory.candidate_record_relation TO <runtime-role>;
+GRANT SELECT ON durable_memory.record, durable_memory.record_revision,
+  durable_memory.change_request TO <runtime-role>;
+GRANT EXECUTE ON FUNCTION durable_memory.submit_change_request(
+  uuid, uuid, text, text, text, jsonb, text, integer, timestamptz, timestamptz, text)
+  TO <runtime-role>;
 GRANT EXECUTE ON FUNCTION durable_memory.decide_change_request(uuid, text)
   TO <runtime-role>;
+GRANT EXECUTE ON FUNCTION durable_memory.proposal_record(uuid)
+  TO <runtime-role>;
+GRANT EXECUTE ON FUNCTION durable_memory.proposal_inventory_definition(uuid, text)
+  TO <runtime-role>; -- proposer-only schema validation lookup
+GRANT EXECUTE ON FUNCTION durable_memory.candidate_identity_assessment(
+  uuid, text, text, jsonb, text) TO <runtime-role>;
+GRANT EXECUTE ON FUNCTION durable_memory.consolidate_candidate(
+  uuid, uuid, text, integer) TO <runtime-role>;
+GRANT EXECUTE ON FUNCTION durable_memory.candidate_semantic_assessment(
+  uuid, double precision, double precision) TO <runtime-role>;
 ```
+
+Do not grant runtime roles `INSERT`, `UPDATE`, or `DELETE` on `record`,
+`record_revision`, `change_request`, `memory_type`, or
+`memory_schema_version`. Do not grant `apply_change_request(...)` or
+`auto_apply_change_request(...)`. Embedding workers, retention, and other
+operator lifecycle actions require a separate operator role.
 
 The migration does not grant application-table access to `PUBLIC`. PostgreSQL
 RLS remains the data boundary after these grants.
+
+See [the operations runbook](docs/operations.md) for the staged rollout,
+synthetic smoke/load checks, embedding rollout, and rollback decision path.
+
+### Lifecycle and preflight
+
+`valid_from` and `valid_to` are canonical record metadata, never payload fields.
+New-record submissions through the typed `MemoryCandidate` API accept
+timezone-aware validity metadata and carry it through their ordinary approval
+request. Consolidating an existing candidate conflict and generic direct
+proposals do not accept validity metadata yet.
+
+Due records are excluded from full-text, vector, and semantic matching. They
+are retained with their revision, candidate, and evidence history. Call the
+bounded `DurableMemory.expire_records(limit=100)` service API to transition due
+records to `expired`; it requires approval capability and never deletes data.
+
+`DurableMemory.doctor()` includes PostgreSQL deployment preflight. It rejects a
+runtime superuser, `BYPASSRLS`, schema/table ownership, missing RLS, dangerous
+canonical-table or internal-function grants, required extensions/functions, or schema usage. It does not expose connection
+URLs or credentials. For in-memory storage it reports not applicable.
 
 ## Commands
 
@@ -230,7 +307,7 @@ hermes durable-memory <action> [options]
 | `bootstrap-profile` | Bind a profile slug to a PostgreSQL login role |
 | `namespaces` / `create-namespace` / `grant` | Inspect and share namespaces |
 | `create-inventory` / `list-inventories` | Define or inspect dynamic inventories |
-| `search` | FTS search with type, namespace, and JSON filters |
+| `search` | Bounded hybrid retrieval with FTS fallback, type, namespace, and JSON filters |
 | `propose` | Create, update, or delete through approval policy |
 | `pending` / `approve` / `reject` | Review and resolve change requests |
 

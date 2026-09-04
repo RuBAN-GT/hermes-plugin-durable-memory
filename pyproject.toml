@@ -33,7 +33,13 @@ dependencies = ["psycopg[binary]>=3.2,<4"]
 dev = ["ruff>=0.8"]
 
 [project.entry-points."hermes_agent.memory_providers"]
-durable-memory = "hermes_durable_memory.plugin:register"
+durable-memory = "hermes_durable_memory.memory_entrypoint:create_provider"
+
+[project.entry-points."hermes_agent.plugins"]
+durable-memory = "hermes_durable_memory.general_plugin:register"
+
+[project.entry-points."hermes_agent.plugin_capabilities"]
+"durable-memory.gateway.human_decisions" = "hermes_durable_memory.general_plugin:register"
 
 [tool.setuptools.packages.find]
 include = ["hermes_durable_memory*"]
@@ -48,6 +54,7 @@ extend-exclude = ["build", "dist"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "hermes_durable_memory/i18n.py" = ["E501"]

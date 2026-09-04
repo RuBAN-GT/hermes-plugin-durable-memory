@@ -2,7 +2,7 @@ name: durable-memory-test
 
 services:
   postgres:
-    image: postgres:18
+    image: pgvector/pgvector:pg18-trixie
     environment:
       POSTGRES_USER: durable_memory
       POSTGRES_PASSWORD: durable_memory
