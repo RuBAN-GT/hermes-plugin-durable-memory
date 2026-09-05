@@ -16,7 +16,24 @@ shell history, tickets, or this repository.
    hermes durable-memory migration-status
    ```
 
-3. Start Hermes with one runtime profile and run:
+3. Before starting Hermes, rerun `bootstrap-profile` as the migration owner for
+   every runtime profile. Supply that profile's configured approval-policy
+   environment variables. This step is mandatory after migration: migration
+   backfills use fail-safe `require` policies and a 24-hour TTL, while bootstrap
+   reconciles the database rows with the runtime configuration.
+
+   ```bash
+   hermes durable-memory bootstrap-profile \
+     --slug "$DURABLE_MEMORY_PROFILE" \
+     --runtime-role <postgres-role>
+   ```
+
+4. Grant each runtime role the exact function access documented in the README,
+   including `current_operation_policy()`,
+   `save_import_checkpoint(text, text, text, jsonb)`, and
+   `load_import_checkpoint(text, text)`. Do not rely on `PUBLIC` grants.
+
+5. Start Hermes with one runtime profile and run:
 
    ```bash
    hermes durable-memory doctor
@@ -28,7 +45,7 @@ shell history, tickets, or this repository.
     Runtime roles may use only `submit_change_request(...)` and
     `decide_change_request(...)` for canonical changes.
 
-4. Repeat `doctor` for every runtime profile. A profile must not be able to
+6. Repeat `doctor` for every runtime profile. A profile must not be able to
    search a namespace without an explicit `read` grant.
 
 ## Smoke test
@@ -48,13 +65,19 @@ Use synthetic, non-personal values in an isolated staging namespace.
 7. Set an expired validity interval on a synthetic candidate, approve it, call
    the bounded expiration API, and confirm the record is absent from search
    while its revision/evidence history remains present.
+8. Update a synthetic record once with the default patch mode and confirm
+   omitted fields remain. Update it again with `--replace true` and confirm the
+   submitted payload becomes the complete record payload.
 
 ## Embedding rollout
 
 1. Keep FTS enabled as the fallback before enabling an embedding provider.
 2. Configure one embedding model for staging and run the bounded indexing API.
 3. Monitor failed projection jobs and requeue them explicitly after resolving
-   the provider failure. Do not delete canonical records to retry embeddings.
+   the provider failure. Explicit requeue starts a fresh retry budget while
+   retaining the last diagnostic. Expired leases are recovered automatically;
+   exhausted leases remain failed until an explicit requeue. Do not delete
+   canonical records to retry embeddings.
 4. After the model and dimension are stable, create a partial HNSW index for
    that exact model and dimension as described in the README.
 5. Compare FTS-only and hybrid results using synthetic queries before enabling
