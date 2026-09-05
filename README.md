@@ -40,10 +40,6 @@ later, and keeps private namespaces isolated unless you grant access.
 | Human decisions | Approve from the CLI or Telegram buttons in the same session |
 | Privacy controls | Export, retention windows, and two-admin hard purge |
 
-> [!NOTE]
-> `hermes-plugin-history-manager` is a read-only session archive. It is not
-> this plugin's writer or search backend.
-
 ---
 
 ## How it works
