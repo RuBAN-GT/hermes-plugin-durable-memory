@@ -31,10 +31,11 @@ def _database_failure(error: Exception) -> str:
         f"{error_type}; the connection failed before PostgreSQL returned an error "
         "code. Check that the server is reachable and accepts the selected role."
     )
+    missing_module = getattr(error, "name", None) or "an unspecified module"
     missing_driver_hint = (
         "The active Hermes Python environment is missing a required module. "
-        f"Python executable: {sys.executable}. Install psycopg[binary] in that "
-        "environment, then restart the gateway."
+        f"Missing module: {missing_module}. Python executable: {sys.executable}. "
+        "Install the missing package in that environment, then restart the gateway."
     )
     local_hints = {
         "ImportError": missing_driver_hint,

@@ -504,11 +504,11 @@ class SetupCLITests(unittest.TestCase):
             self.assertNotIn("secret-never-print", output)
 
     def test_missing_database_driver_names_the_required_dependency(self):
+        error = ModuleNotFoundError()
+        error.name = "psycopg"
         with tempfile.TemporaryDirectory() as tmp:
-            output, _ = self.invoke(
-                Path(tmp), failure=ModuleNotFoundError("secret-never-print")
-            )
-            self.assertIn("Install psycopg[binary]", output)
+            output, _ = self.invoke(Path(tmp), failure=error)
+            self.assertIn("Missing module: psycopg", output)
             self.assertIn("Python executable:", output)
             self.assertNotIn("secret-never-print", output)
 
