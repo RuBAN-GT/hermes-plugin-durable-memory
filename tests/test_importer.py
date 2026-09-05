@@ -3,14 +3,24 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from dataclasses import dataclass
 from pathlib import Path
 
 from hermes_durable_memory.config import Settings
 from hermes_durable_memory.importer import import_candidates
 from hermes_durable_memory.importers import HolographicSQLiteSource
+from hermes_durable_memory.models import CommandError, MemoryCandidate
 from hermes_durable_memory.policies import ApprovalPolicy
 from hermes_durable_memory.service import DurableMemory
 from hermes_durable_memory.store import InMemoryStore
+
+
+@dataclass(frozen=True, slots=True)
+class _RejectingSubmitter:
+    error: OSError | ValueError
+
+    def submit_candidate(self, candidate: MemoryCandidate) -> dict[str, object]:
+        raise self.error
 
 
 class HolographicImportTests(unittest.TestCase):
@@ -122,6 +132,76 @@ class HolographicImportTests(unittest.TestCase):
             )
             self.assertEqual(saved, {"checkpoint": "2", "report": report.as_dict()})
             self.assertTrue(saved["report"]["explained"])
+
+    def test_transient_failure_does_not_advance_checkpoint(self) -> None:
+        # Given
+        with tempfile.TemporaryDirectory() as directory:
+            source = self._source(Path(directory))
+            store = InMemoryStore()
+            raised = False
+
+            # When
+            try:
+                import_candidates(
+                    _RejectingSubmitter(OSError("temporary source failure")),
+                    source,
+                    source_name=source.source_name,
+                    checkpoint_store=store,
+                    scope="profile:alpha",
+                )
+            except OSError:
+                raised = True
+
+            # Then
+            saved = store.load_import_checkpoint(
+                source=source.source_name, scope="profile:alpha"
+            )
+            self.assertEqual((raised, saved), (True, None))
+
+    def test_command_error_does_not_advance_checkpoint(self) -> None:
+        # Given
+        with tempfile.TemporaryDirectory() as directory:
+            source = self._source(Path(directory))
+            store = InMemoryStore()
+
+            # When / Then
+            with self.assertRaises(CommandError):
+                import_candidates(
+                    _RejectingSubmitter(CommandError("database unavailable")),
+                    source,
+                    source_name=source.source_name,
+                    checkpoint_store=store,
+                    scope="profile:alpha",
+                )
+            self.assertIsNone(
+                store.load_import_checkpoint(
+                    source=source.source_name, scope="profile:alpha"
+                )
+            )
+
+    def test_value_error_remains_counted_rejection(self) -> None:
+        # Given
+        with tempfile.TemporaryDirectory() as directory:
+            source = self._source(Path(directory))
+            store = InMemoryStore()
+
+            # When
+            report = import_candidates(
+                _RejectingSubmitter(ValueError("invalid candidate")),
+                source,
+                source_name=source.source_name,
+                checkpoint_store=store,
+                scope="profile:alpha",
+            )
+
+            # Then
+            saved = store.load_import_checkpoint(
+                source=source.source_name, scope="profile:alpha"
+            )
+            self.assertEqual(
+                (report.seen, report.rejected, report.checkpoint, saved),
+                (2, 2, "2", {"checkpoint": "2", "report": report.as_dict()}),
+            )
 
 
 if __name__ == "__main__":

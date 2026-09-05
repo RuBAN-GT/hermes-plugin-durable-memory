@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .models import MemoryCandidate
+from .models import CommandError, MemoryCandidate
 
 
 class CandidateSource(Protocol):
@@ -105,7 +105,9 @@ def import_candidates(
         for candidate in candidates:
             try:
                 result = submitter.submit_candidate(candidate)
-            except (OSError, ValueError):
+            except CommandError:
+                raise
+            except ValueError:
                 rejected += 1
                 continue
             assessment = result.get("assessment")
