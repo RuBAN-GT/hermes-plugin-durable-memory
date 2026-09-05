@@ -353,6 +353,7 @@ not conflict. Never infer another profile.
 | `DURABLE_MEMORY_STORE` | required | `memory` or `postgres` |
 | `DURABLE_MEMORY_PROFILE` | `$HERMES_PROFILE` | Runtime profile slug |
 | `DURABLE_MEMORY_DATABASE_URL` | — | Runtime PostgreSQL URL |
+| `DURABLE_MEMORY_SCHEMA` | `durable_memory` | PostgreSQL schema for all plugin tables, functions, and migrations; lowercase identifier |
 | `DURABLE_MEMORY_MIGRATION_DATABASE_URL` | — | Migrations and bootstrap only |
 | `DURABLE_MEMORY_DANGER_ALLOW_UNSAFE_RUNTIME` | `false` | Explicit unsafe single-role deployment; accepts `true` or `false` |
 | `DURABLE_MEMORY_APPROVAL_CREATE` | `require` | `require` \| `auto` \| `deny` |
@@ -363,6 +364,10 @@ not conflict. Never infer another profile.
 > [!WARNING]
 > Use a separate `DURABLE_MEMORY_MIGRATION_DATABASE_URL` for migrations and
 > profile bootstrap. Never run Hermes as the migration owner or a superuser.
+
+Set `DURABLE_MEMORY_SCHEMA=public` only when the shared `public` schema is an
+intentional deployment choice. The value is used for every plugin object and
+must be chosen before the first migration; changing it later does not move data.
 
 ### Explicit unsafe single-role deployment
 

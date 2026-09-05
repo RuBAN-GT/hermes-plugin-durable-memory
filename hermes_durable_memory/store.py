@@ -9,6 +9,7 @@ from decimal import Decimal
 from math import isfinite
 from typing import Any
 
+from .database import DEFAULT_SCHEMA, SchemaConnection, validate_schema
 from .i18n import t
 from .models import (
     CAPABILITIES,
@@ -992,10 +993,11 @@ class InMemoryStore:
 class PostgresStore:
     """PostgreSQL-backed store; the database role identifies the profile."""
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, schema: str = DEFAULT_SCHEMA) -> None:
         if not database_url:
             raise CommandError("A PostgreSQL database URL is required.")
         self._database_url = database_url
+        self._schema = validate_schema(schema)
 
     @staticmethod
     def _psycopg():
@@ -1008,7 +1010,9 @@ class PostgresStore:
         return psycopg
 
     def _connection(self):
-        return self._psycopg().connect(self._database_url)
+        return SchemaConnection(
+            self._psycopg().connect(self._database_url), self._schema
+        )
 
     @staticmethod
     def _profile(row: tuple[Any, ...]) -> Profile:

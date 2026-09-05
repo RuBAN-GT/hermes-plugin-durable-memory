@@ -81,7 +81,9 @@ class DurableMemory:
         if self.settings.store == "postgres":
             if not self.settings.database_url:
                 raise CommandError(t("database_url_missing"))
-            self._store = PostgresStore(self.settings.database_url)
+            self._store = PostgresStore(
+                self.settings.database_url, self.settings.schema
+            )
         else:
             self._store = InMemoryStore()
         return self._store
@@ -1006,7 +1008,7 @@ class DurableMemory:
         url = self.settings.migration_database_url
         if not url and self.settings.allow_unsafe_runtime:
             url = self.settings.database_url
-        return DatabaseMigrator(url or "")
+        return DatabaseMigrator(url or "", self.settings.schema)
 
     @staticmethod
     def setup_database(plan) -> dict[str, Any]:
@@ -1024,7 +1026,7 @@ class DurableMemory:
                 if user != account.user:
                     raise CommandError(t("setup_connection_identity", language="en"))
         settings = plan.settings()
-        migrator = DatabaseMigrator(plan.owner.url)
+        migrator = DatabaseMigrator(plan.owner.url, plan.schema)
         migrator.migrate()
         migrator.bootstrap_profile(plan.profile, plan.runtime.user, settings.policy)
         if not plan.danger:

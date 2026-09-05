@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from urllib.parse import quote
 
 from .config import Settings
+from .database import DEFAULT_SCHEMA, validate_schema
 from .i18n import t as _translate
 from .models import CommandError
 from .policies import ApprovalPolicy
@@ -72,6 +73,7 @@ class SetupPlan:
     owner: ConnectionInput
     danger: bool = False
     admin: ConnectionInput | None = None
+    schema: str = DEFAULT_SCHEMA
 
     def __post_init__(self):
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", self.profile):
@@ -89,6 +91,7 @@ class SetupPlan:
             self.runtime.port,
         ):
             raise CommandError(t("setup_input_invalid"))
+        validate_schema(self.schema)
 
     def settings(self) -> Settings:
         return Settings(
@@ -97,6 +100,7 @@ class SetupPlan:
             policy=ApprovalPolicy(),
             database_url=self.runtime.url,
             migration_database_url=self.owner.url,
+            schema=self.schema,
             allow_unsafe_runtime=self.danger,
         )
 
@@ -105,6 +109,7 @@ class SetupPlan:
             "DURABLE_MEMORY_STORE": "postgres",
             "DURABLE_MEMORY_PROFILE": self.profile,
             "DURABLE_MEMORY_DATABASE_URL": self.runtime.url,
+            "DURABLE_MEMORY_SCHEMA": self.schema,
             "DURABLE_MEMORY_DANGER_ALLOW_UNSAFE_RUNTIME": str(self.danger).lower(),
             "DURABLE_MEMORY_APPROVAL_CREATE": "require",
             "DURABLE_MEMORY_APPROVAL_UPDATE": "require",

@@ -16,7 +16,10 @@ import yaml
 from dotenv import dotenv_values
 from psycopg.conninfo import conninfo_to_dict
 
+from hermes_durable_memory.config import Settings
+from hermes_durable_memory.database import SchemaConnection
 from hermes_durable_memory.general_plugin import _cli_handler, _cli_setup
+from hermes_durable_memory.migrations import DatabaseMigrator
 from hermes_durable_memory.models import CommandError
 from hermes_durable_memory.service import DurableMemory
 from hermes_durable_memory.setup_cli import run_setup
@@ -171,6 +174,34 @@ class SetupFileTests(unittest.TestCase):
 
 
 class SetupPlanTests(unittest.TestCase):
+    def test_schema_connection_rewrites_internal_sql(self):
+        from unittest.mock import Mock
+
+        connection = Mock()
+        SchemaConnection(connection, "memory_data").execute(
+            "SELECT * FROM durable_memory.record"
+        )
+        self.assertEqual(
+            connection.execute.call_args.args[0], "SELECT * FROM memory_data.record"
+        )
+
+    def test_schema_is_saved_and_substituted_in_migrations(self):
+        plan = SetupPlan("test", account(), account("owner"), schema="memory_data")
+        self.assertEqual(plan.env_values()["DURABLE_MEMORY_SCHEMA"], "memory_data")
+        migrations = DatabaseMigrator(account().url, "memory_data")._migrations()
+        self.assertIn("memory_data.schema_migration", migrations[0].sql)
+        self.assertNotIn("durable_memory.schema_migration", migrations[0].sql)
+
+    def test_schema_must_be_a_safe_postgresql_identifier(self):
+        environment = {
+            "DURABLE_MEMORY_STORE": "postgres",
+            "DURABLE_MEMORY_PROFILE": "test",
+            "DURABLE_MEMORY_DATABASE_URL": account().url,
+            "DURABLE_MEMORY_SCHEMA": "memory; DROP SCHEMA public",
+        }
+        with self.assertRaises(CommandError):
+            Settings.from_env(environment)
+
     def test_grant_resource_matches_documented_privileges(self):
         root = Path(__file__).parents[1]
         grants = (
@@ -389,7 +420,18 @@ class SetupCLITests(unittest.TestCase):
             stack.enter_context(
                 patch(
                     "builtins.input",
-                    side_effect=["", "", "", "", "", "", "no", "yes", confirm],
+                    side_effect=[
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "no",
+                        "yes",
+                        confirm,
+                    ],
                 )
             )
             database = stack.enter_context(

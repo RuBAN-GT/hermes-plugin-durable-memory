@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass
 from importlib.resources import files
 
+from .database import DEFAULT_SCHEMA, SchemaConnection, rewrite_schema, validate_schema
 from .i18n import t
 from .models import OPERATIONS, CommandError
 from .policies import ApprovalPolicy
@@ -26,10 +27,14 @@ class Migration:
 class DatabaseMigrator:
     """Apply ordered, checksummed SQL migrations using a migration-owner URL."""
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, schema: str = DEFAULT_SCHEMA) -> None:
         if not database_url:
             raise CommandError(t("migration_url_missing"))
         self._database_url = database_url
+        self._schema = validate_schema(schema)
+
+    def _connection(self, psycopg):
+        return SchemaConnection(psycopg.connect(self._database_url), self._schema)
 
     def status(self) -> list[dict[str, object]]:
         migrations = self._migrations()
@@ -39,7 +44,7 @@ class DatabaseMigrator:
             raise CommandError(
                 "Install psycopg to use PostgreSQL migrations."
             ) from error
-        with psycopg.connect(self._database_url) as connection:
+        with self._connection(psycopg) as connection:
             exists = connection.execute(
                 "SELECT to_regclass('durable_memory.schema_migration')"
             ).fetchone()[0]
@@ -73,7 +78,7 @@ class DatabaseMigrator:
                 "Install psycopg to use PostgreSQL migrations."
             ) from error
         applied: list[dict[str, object]] = []
-        with psycopg.connect(self._database_url) as connection:
+        with self._connection(psycopg) as connection:
             connection.execute(
                 "SELECT pg_advisory_xact_lock(hashtext('durable_memory.schema_migration'))"
             )
@@ -137,7 +142,7 @@ class DatabaseMigrator:
             import psycopg
         except ImportError as error:
             raise CommandError("Install psycopg to bootstrap a profile.") from error
-        with psycopg.connect(self._database_url) as connection:
+        with self._connection(psycopg) as connection:
             role = connection.execute(
                 "SELECT 1 FROM pg_roles WHERE rolname = %s", (runtime_role,)
             ).fetchone()
@@ -198,7 +203,8 @@ class DatabaseMigrator:
             .joinpath("resources/runtime_grants.sql")
             .read_text(encoding="utf-8")
         )
-        with psycopg.connect(self._database_url) as connection:
+        grants = rewrite_schema(grants, self._schema)
+        with self._connection(psycopg) as connection:
             database = connection.execute("SELECT current_database()").fetchone()[0]
             connection.execute(
                 sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
@@ -213,15 +219,14 @@ class DatabaseMigrator:
                         )
                     )
 
-    @staticmethod
-    def _migrations() -> list[Migration]:
+    def _migrations(self) -> list[Migration]:
         sql_dir = files("hermes_durable_memory").joinpath("sql")
         migrations: list[Migration] = []
         for path in sql_dir.iterdir():
             match = _MIGRATION_NAME.match(path.name)
             if not match:
                 continue
-            sql = path.read_text(encoding="utf-8")
+            sql = rewrite_schema(path.read_text(encoding="utf-8"), self._schema)
             migrations.append(
                 Migration(
                     version=int(match.group("version")),

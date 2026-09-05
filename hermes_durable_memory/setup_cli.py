@@ -149,6 +149,7 @@ def run_setup(*, profile: str | None = None, danger: bool = False) -> None:
         host = _ask("setup_host", "127.0.0.1")
         port = int(_ask("setup_port", "5432"))
         database = _ask("setup_database", "durable_memory")
+        schema = _ask("setup_schema", "durable_memory")
         sslmode = _ask("setup_sslmode", "prefer")
         user = _ask("setup_runtime_user", "durable_memory")
         runtime = ConnectionInput(
@@ -170,7 +171,7 @@ def run_setup(*, profile: str | None = None, danger: bool = False) -> None:
                 password=_password("setup_admin_password"),
             )
         activate = _yes("setup_activate")
-        plan = SetupPlan(selected, runtime, owner, danger, admin)
+        plan = SetupPlan(selected, runtime, owner, danger, admin, schema)
         values = plan.env_values()
         _check_managed(home, values, activate)
         rendered = files.render(values, activate=activate)
@@ -182,6 +183,7 @@ def run_setup(*, profile: str | None = None, danger: bool = False) -> None:
                 host=host,
                 port=port,
                 database=database,
+                schema=schema,
                 user=user,
                 owner=owner.user,
                 sslmode=sslmode,

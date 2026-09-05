@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from .database import DEFAULT_SCHEMA, validate_schema
 from .i18n import t
 from .models import CommandError
 from .policies import ApprovalPolicy
@@ -27,6 +28,7 @@ class Settings:
     ollama_model: str | None = None
     ollama_timeout_seconds: float = 10.0
     embedding_max_distance: float = 0.35
+    schema: str = DEFAULT_SCHEMA
 
     def __repr__(self) -> str:
         return (
@@ -100,6 +102,7 @@ class Settings:
                 ttl_seconds=ttl_seconds,
             ),
             database_url=database_url,
+            schema=validate_schema(env.get("DURABLE_MEMORY_SCHEMA", DEFAULT_SCHEMA)),
             migration_database_url=migration_database_url,
             embedding_provider=embedding_provider,
             ollama_base_url=ollama_base_url,

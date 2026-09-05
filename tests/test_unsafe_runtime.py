@@ -97,7 +97,9 @@ class UnsafeRuntimeTests(unittest.TestCase):
             settings = self.settings(**env)
             with patch("hermes_durable_memory.service.DatabaseMigrator") as migrator:
                 DurableMemory(settings=settings)._migrator()
-                migrator.assert_called_once_with(explicit or settings.database_url)
+                migrator.assert_called_once_with(
+                    explicit or settings.database_url, settings.schema
+                )
 
     def test_danger_doctor_keeps_policy_mismatch_fatal(self):
         settings = self.settings(DURABLE_MEMORY_DANGER_ALLOW_UNSAFE_RUNTIME="true")
