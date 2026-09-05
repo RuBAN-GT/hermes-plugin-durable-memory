@@ -398,7 +398,7 @@ class SetupCLITests(unittest.TestCase):
                 self.assertEqual(_profile_home("chosen", "chosen"), Path(tmp).resolve())
             profiles.resolve_profile_env.assert_not_called()
 
-    def invoke(self, home, *, confirm="yes", failure=None):
+    def invoke(self, home, *, confirm="yes", failure=None, inputs=None, **options):
         output = io.StringIO()
         with ExitStack() as stack:
             stack.enter_context(
@@ -420,7 +420,8 @@ class SetupCLITests(unittest.TestCase):
             stack.enter_context(
                 patch(
                     "builtins.input",
-                    side_effect=[
+                    side_effect=inputs
+                    or [
                         "",
                         "",
                         "",
@@ -444,7 +445,7 @@ class SetupCLITests(unittest.TestCase):
             )
             stack.enter_context(redirect_stdout(output))
             try:
-                run_setup(danger=True)
+                run_setup(danger=True, **options)
             except SystemExit as error:
                 output.write(str(error))
             return output.getvalue(), database
@@ -468,6 +469,26 @@ class SetupCLITests(unittest.TestCase):
                 saved["DURABLE_MEMORY_DANGER_ALLOW_UNSAFE_RUNTIME"], "true"
             )
             self.assertNotIn("secret-never-print", output)
+
+    def test_prefilled_options_skip_their_questions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output, database = self.invoke(
+                Path(tmp),
+                profile="test",
+                host="127.0.0.1",
+                port=5432,
+                database="memory",
+                schema="public",
+                sslmode="prefer",
+                user="memory_runtime",
+                provision=False,
+                activate=True,
+                inputs=["yes"],
+            )
+            database.assert_called_once()
+            self.assertNotIn("PostgreSQL host", output)
+            self.assertNotIn("Runtime database user", output)
+            self.assertIn("schema: public", output)
 
     def test_database_error_does_not_save_files_or_print_driver_secrets(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -514,10 +535,42 @@ class SetupCLITests(unittest.TestCase):
     def test_setup_dispatches_without_reading_unconfigured_settings(self):
         parser = argparse.ArgumentParser()
         _cli_setup(parser)
-        args = parser.parse_args(["setup", "--target-profile", "test", "--danger"])
+        args = parser.parse_args(
+            [
+                "setup",
+                "--target-profile",
+                "test",
+                "--danger",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "5432",
+                "--database",
+                "memory",
+                "--schema",
+                "public",
+                "--sslmode",
+                "prefer",
+                "--runtime-user",
+                "memory_runtime",
+                "--no-provision",
+                "--activate",
+            ]
+        )
         with patch("hermes_durable_memory.setup_cli.run_setup") as wizard:
             _cli_handler(DurableMemory(environment={}), args)
-            wizard.assert_called_once_with(profile="test", danger=True)
+            wizard.assert_called_once_with(
+                profile="test",
+                danger=True,
+                host="127.0.0.1",
+                port=5432,
+                database="memory",
+                schema="public",
+                sslmode="prefer",
+                user="memory_runtime",
+                provision=False,
+                activate=True,
+            )
 
     def test_noninteractive_setup_refuses_password_input(self):
         with (

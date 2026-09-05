@@ -11,10 +11,11 @@ from .service import DurableMemory
 
 
 def _cli_setup(parser: Any) -> None:
+    from .setup_cli import add_setup_arguments
+
     subparsers = parser.add_subparsers(dest="action", required=True)
     setup = subparsers.add_parser("setup", help=t("setup_help"))
-    setup.add_argument("--target-profile", dest="profile", help=t("setup_profile"))
-    setup.add_argument("--danger", action="store_true", help=t("setup_single_role"))
+    add_setup_arguments(setup)
     for action in (
         "doctor",
         "namespaces",
@@ -63,7 +64,18 @@ def _cli_handler(memory: DurableMemory, args: Any) -> None:
     if args.action == "setup":
         from .setup_cli import run_setup
 
-        run_setup(profile=args.profile, danger=args.danger)
+        run_setup(
+            profile=args.profile,
+            danger=args.danger,
+            host=args.host,
+            port=args.port,
+            database=args.database,
+            schema=args.schema,
+            sslmode=args.sslmode,
+            user=args.user,
+            provision=args.provision,
+            activate=args.activate,
+        )
         return
     try:
         options = []

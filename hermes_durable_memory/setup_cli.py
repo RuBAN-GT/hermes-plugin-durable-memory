@@ -91,6 +91,34 @@ def _password(key: str) -> str:
         return getpass.getpass(t(key) + ": ")
 
 
+def add_setup_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add safe prefill options; credentials stay off the command line."""
+    parser.add_argument("--target-profile", dest="profile", help=t("setup_profile"))
+    parser.add_argument("--danger", action="store_true", help=t("setup_single_role"))
+    parser.add_argument("--host", help=t("setup_host"))
+    parser.add_argument("--port", type=int, help=t("setup_port"))
+    parser.add_argument("--database", help=t("setup_database"))
+    parser.add_argument("--schema", help=t("setup_schema"))
+    parser.add_argument(
+        "--sslmode",
+        choices=("disable", "prefer", "require", "verify-ca", "verify-full"),
+        help=t("setup_sslmode"),
+    )
+    parser.add_argument("--runtime-user", dest="user", help=t("setup_runtime_user"))
+    parser.add_argument(
+        "--provision",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=t("setup_provision"),
+    )
+    parser.add_argument(
+        "--activate",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=t("setup_activate"),
+    )
+
+
 def _profile_home(profile: str, current: str) -> Path:
     from hermes_cli.profiles import resolve_profile_env, validate_profile_name
     from hermes_constants import get_hermes_home
@@ -128,7 +156,19 @@ def _check_managed(home: Path, keys: dict[str, str | None], activate: bool) -> N
         raise CommandError(t("setup_managed"))
 
 
-def run_setup(*, profile: str | None = None, danger: bool = False) -> None:
+def run_setup(
+    *,
+    profile: str | None = None,
+    danger: bool = False,
+    host: str | None = None,
+    port: int | None = None,
+    database: str | None = None,
+    schema: str | None = None,
+    sslmode: str | None = None,
+    user: str | None = None,
+    provision: bool | None = None,
+    activate: bool | None = None,
+) -> None:
     if not sys.stdin.isatty():
         raise SystemExit(t("setup_tty_required"))
     stage = "setup_stage_questions"
@@ -158,12 +198,12 @@ def run_setup(*, profile: str | None = None, danger: bool = False) -> None:
         danger = danger or _yes("setup_single_role")
         if danger:
             print(t("unsafe_runtime_warning"))
-        host = _ask("setup_host", "127.0.0.1")
-        port = int(_ask("setup_port", "5432"))
-        database = _ask("setup_database", "durable_memory")
-        schema = _ask("setup_schema", "durable_memory")
-        sslmode = _ask("setup_sslmode", "prefer")
-        user = _ask("setup_runtime_user", "durable_memory")
+        host = host or _ask("setup_host", "127.0.0.1")
+        port = port if port is not None else int(_ask("setup_port", "5432"))
+        database = database or _ask("setup_database", "durable_memory")
+        schema = schema or _ask("setup_schema", "durable_memory")
+        sslmode = sslmode or _ask("setup_sslmode", "prefer")
+        user = user or _ask("setup_runtime_user", "durable_memory")
         runtime = ConnectionInput(
             host, port, database, user, _password("setup_runtime_password"), sslmode
         )
@@ -175,14 +215,17 @@ def run_setup(*, profile: str | None = None, danger: bool = False) -> None:
                 password=_password("setup_owner_password"),
             )
         admin = None
-        if _yes("setup_provision"):
+        should_provision = (
+            provision if provision is not None else _yes("setup_provision")
+        )
+        if should_provision:
             admin = replace(
                 runtime,
                 database=_ask("setup_admin_database", "postgres"),
                 user=_ask("setup_admin_user", "postgres"),
                 password=_password("setup_admin_password"),
             )
-        activate = _yes("setup_activate")
+        activate = activate if activate is not None else _yes("setup_activate")
         plan = SetupPlan(selected, runtime, owner, danger, admin, schema)
         values = plan.env_values()
         _check_managed(home, values, activate)
@@ -232,10 +275,9 @@ def run_setup(*, profile: str | None = None, danger: bool = False) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=t("setup_help"))
-    parser.add_argument("--target-profile", dest="profile", help=t("setup_profile"))
-    parser.add_argument("--danger", action="store_true", help=t("setup_single_role"))
+    add_setup_arguments(parser)
     args = parser.parse_args()
-    run_setup(profile=args.profile, danger=args.danger)
+    run_setup(**vars(args))
 
 
 if __name__ == "__main__":
