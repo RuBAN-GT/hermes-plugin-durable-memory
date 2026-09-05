@@ -104,22 +104,37 @@ class DurableMemory:
 
     def doctor(self) -> dict[str, Any]:
         connected = False
+        configured_policy = self.settings.policy
+        effective_policy = configured_policy
+        policy_mismatch = False
         try:
-            preflight = self.store().deployment_preflight()
+            store = self.store()
+            preflight = store.deployment_preflight()
             connected = self.settings.store == "postgres"
+            if isinstance(store, PostgresStore):
+                effective_policy = store.operation_policy()
+                policy_mismatch = effective_policy != configured_policy
+                if policy_mismatch:
+                    preflight["ok"] = False
+                    preflight["checks"].append(
+                        "configured approval policy does not match PostgreSQL operation policy"
+                    )
         except Exception:
             preflight = {
                 "applicable": True,
                 "ok": False,
                 "checks": ["PostgreSQL connectivity check failed."],
             }
+            effective_policy = None
+            policy_mismatch = self.settings.store == "postgres"
+        reported_policy = effective_policy or configured_policy
         message = t(
             "doctor",
             store=t(f"store_{self.settings.store}"),
             profile=self.settings.profile,
-            create=self.settings.policy.create,
-            update=self.settings.policy.update,
-            delete=self.settings.policy.delete,
+            create=reported_policy.create,
+            update=reported_policy.update,
+            delete=reported_policy.delete,
             postgres=t("postgres_connected" if connected else "postgres_not_connected"),
         )
         if self.settings.store == "memory":
@@ -130,7 +145,12 @@ class DurableMemory:
             "message": message,
             "store": self.settings.store,
             "profile": self.settings.profile,
-            "policy": self.settings.policy.as_dict(),
+            "policy": reported_policy.as_dict(),
+            "effective_policy": effective_policy.as_dict()
+            if effective_policy
+            else None,
+            "configured_policy": configured_policy.as_dict(),
+            "policy_mismatch": policy_mismatch,
             "postgres_ready": connected and bool(preflight["ok"]),
             "ephemeral": self.settings.store == "memory",
             "deployment_preflight": preflight,
@@ -229,9 +249,14 @@ class DurableMemory:
             else None
         )
         parsed_filters = self._json_object(filters, "filters")
+        if cursor and query.strip() and not sort:
+            raise CommandError(t("ranked_cursor_unsupported"))
+        if (parsed_filters or sort) and not namespace:
+            raise CommandError(t("schema_search_namespace_required"))
         if parsed_filters and not record_type:
             raise CommandError("Filters require an explicit record type.")
         definitions: list[InventoryDefinition] = []
+        sort_kind = None
         if parsed_filters:
             namespaces = [namespace] if namespace else store.list_namespaces(profile)
             definitions = [
@@ -269,6 +294,12 @@ class DurableMemory:
                 raise CommandError(
                     "Sort field is not allowed by the inventory definition."
                 )
+            sort_kinds = {definition.fields[sort].kind for definition in definitions}
+            if len(sort_kinds) != 1:
+                raise CommandError(
+                    "Sort field kind must match across visible inventory definitions."
+                )
+            sort_kind = next(iter(sort_kinds))
         # Apply filters in the store before ranking and limiting. This prevents
         # false empty pages when a matching record ranks after unfiltered rows.
         retrieval_limit = limit
@@ -281,6 +312,7 @@ class DurableMemory:
             filters=parsed_filters or None,
             cursor=cursor,
             sort=sort,
+            sort_kind=sort_kind,
             descending=descending,
         )
         vector_records: list[tuple[Record, float]] = []
@@ -506,7 +538,7 @@ class DurableMemory:
             default=private,
             capability="propose",
         )
-        policy_action = self.settings.policy.for_operation("create")
+        policy_action = self._policy_action(store, "create")
         if policy_action == "deny":
             raise CommandError(t("operation_denied", operation=t("operation_create")))
         definition = store.get_inventory_definition_for_proposal(
@@ -551,7 +583,7 @@ class DurableMemory:
         """Turn a reviewed duplicate or conflict into an update proposal."""
         store = self.store()
         profile = store.get_or_create_profile(self.settings.profile)
-        policy_action = self.settings.policy.for_operation("update")
+        policy_action = self._policy_action(store, "update")
         if policy_action == "deny":
             raise CommandError(t("operation_denied", operation=t("operation_update")))
         request = store.consolidate_candidate(
@@ -591,7 +623,7 @@ class DurableMemory:
         )
         if store.get_inventory_definition_for_proposal(profile, namespace, record_type):
             raise CommandError(t("inventory_exists", type=record_type))
-        policy_action = self.settings.policy.for_operation("create")
+        policy_action = self._policy_action(store, "create")
         if policy_action == "deny":
             raise CommandError(t("operation_denied", operation=t("operation_create")))
         request = store.propose_inventory(
@@ -988,7 +1020,9 @@ class DurableMemory:
         runtime_role = options.get("runtime-role")
         if not slug or not runtime_role:
             raise CommandError(t("usage_bootstrap_profile"))
-        profile = self._migrator().bootstrap_profile(slug, runtime_role)
+        profile = self._migrator().bootstrap_profile(
+            slug, runtime_role, self.settings.policy
+        )
         return {
             "message": t("profile_bootstrapped", slug=slug, role=runtime_role),
             "profile": profile,
@@ -1100,7 +1134,7 @@ class DurableMemory:
             default=private,
             capability="propose",
         )
-        policy_action = self.settings.policy.for_operation(operation)
+        policy_action = self._policy_action(store, operation)
         if policy_action == "deny":
             raise CommandError(
                 t("operation_denied", operation=t(f"operation_{operation}"))
@@ -1130,6 +1164,9 @@ class DurableMemory:
             existing=existing,
             replace=self._bool_option(options.get("replace")),
         )
+        update_mode = (
+            "replace" if self._bool_option(options.get("replace")) else "patch"
+        )
         if operation != "create":
             payload.pop("identity", None)
         request = store.propose(
@@ -1142,6 +1179,7 @@ class DurableMemory:
             payload=payload,
             policy_action=policy_action,
             ttl_seconds=self.settings.policy.ttl_seconds,
+            update_mode=update_mode,
             record_id=options.get("record-id"),
             expected_revision=self._optional_int(options.get("expected-revision")),
         )
@@ -1167,6 +1205,19 @@ class DurableMemory:
             "message": self._pending_message(requests),
             "requests": [request.as_dict() for request in requests],
         }
+
+    def _policy_action(
+        self, store: InMemoryStore | PostgresStore, operation: str
+    ) -> str:
+        configured = self.settings.policy
+        if isinstance(store, PostgresStore):
+            effective = store.operation_policy()
+            if effective != configured:
+                raise CommandError(
+                    "Configured approval policy does not match PostgreSQL operation policy."
+                )
+            return effective.for_operation(operation)
+        return configured.for_operation(operation)
 
     def _decide(self, options: dict[str, str], decision: str) -> dict[str, Any]:
         request_id = options.get("request-id")

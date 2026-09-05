@@ -273,6 +273,7 @@ class ChangeRequest:
     record_type: str
     identity_key: str
     expected_revision: int | None
+    update_mode: str
     payload: dict[str, Any]
     search_text: str
     idempotency_key: str
@@ -295,6 +296,7 @@ class ChangeRequest:
             "type": self.record_type,
             "identity": self.identity_key,
             "expected_revision": self.expected_revision,
+            "update_mode": self.update_mode,
             "text": self.search_text,
             "payload": self.payload,
             "status": self.status,

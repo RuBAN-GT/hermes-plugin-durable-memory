@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from importlib.resources import files
 
 from .i18n import t
-from .models import CommandError
+from .models import OPERATIONS, CommandError
+from .policies import ApprovalPolicy
 
 _MIGRATION_NAME = re.compile(r"^(?P<version>\d+)_(?P<name>[a-z0-9_]+)\.sql$")
 
@@ -123,7 +124,13 @@ class DatabaseMigrator:
                     f"Migration {version} has changed after application."
                 )
 
-    def bootstrap_profile(self, slug: str, runtime_role: str) -> dict[str, str]:
+    def bootstrap_profile(
+        self,
+        slug: str,
+        runtime_role: str,
+        policy: ApprovalPolicy | None = None,
+    ) -> dict[str, str]:
+        policy = policy or ApprovalPolicy()
         if not slug or not runtime_role:
             raise CommandError("Profile slug and runtime role are required.")
         try:
@@ -144,13 +151,28 @@ class DatabaseMigrator:
             if row:
                 if row[1] != runtime_role:
                     raise CommandError(f"Profile already uses another role: {slug}")
-                return {"id": row[0], "slug": slug, "runtime_role": runtime_role}
-            profile_id = str(uuid.uuid4())
-            connection.execute(
-                "INSERT INTO durable_memory.profile (id, slug, runtime_role) "
-                "VALUES (%s, %s, %s)",
-                (profile_id, slug, runtime_role),
-            )
+                profile_id = row[0]
+            else:
+                profile_id = str(uuid.uuid4())
+                connection.execute(
+                    "INSERT INTO durable_memory.profile (id, slug, runtime_role) "
+                    "VALUES (%s, %s, %s)",
+                    (profile_id, slug, runtime_role),
+                )
+            for operation in sorted(OPERATIONS):
+                connection.execute(
+                    "INSERT INTO durable_memory.operation_policy "
+                    "(profile_id, operation, action, ttl_seconds) "
+                    "VALUES (%s, %s, %s, %s) "
+                    "ON CONFLICT (profile_id, operation) DO UPDATE "
+                    "SET action = EXCLUDED.action, ttl_seconds = EXCLUDED.ttl_seconds",
+                    (
+                        profile_id,
+                        operation,
+                        policy.for_operation(operation),
+                        policy.ttl_seconds,
+                    ),
+                )
         return {"id": profile_id, "slug": slug, "runtime_role": runtime_role}
 
     @staticmethod

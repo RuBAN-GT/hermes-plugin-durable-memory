@@ -4,7 +4,8 @@ import hashlib
 import json
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from math import isfinite
 from typing import Any
 
@@ -27,6 +28,7 @@ from .models import (
     Record,
     StoreState,
 )
+from .policies import ApprovalPolicy
 
 
 def _now() -> datetime:
@@ -76,23 +78,35 @@ def idempotency_key(
     profile_id: str,
     operation: str,
     namespace_id: str,
+    record_id: str | None,
+    record_type: str,
     identity_key: str,
     payload: dict[str, Any],
+    search_text: str,
     expected_revision: int | None,
+    update_mode: str,
     valid_from: datetime | None = None,
     valid_to: datetime | None = None,
 ) -> str:
-    material = "|".join(
-        [
-            profile_id,
-            operation,
-            namespace_id,
-            identity_key,
-            payload_hash(payload),
-            "" if expected_revision is None else str(expected_revision),
-            "" if valid_from is None else valid_from.isoformat(),
-            "" if valid_to is None else valid_to.isoformat(),
-        ]
+    material = json.dumps(
+        {
+            "expected_revision": expected_revision,
+            "identity_key": identity_key,
+            "namespace_id": namespace_id,
+            "operation": operation,
+            "payload": payload,
+            "profile_id": profile_id,
+            "record_id": record_id,
+            "record_type": record_type,
+            "search_text": search_text,
+            "update_mode": update_mode,
+            "valid_from": valid_from.isoformat() if valid_from else None,
+            "valid_to": valid_to.isoformat() if valid_to else None,
+        },
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
@@ -336,6 +350,7 @@ class InMemoryStore:
         include_inventory: bool = False,
         cursor: str | None = None,
         sort: str | None = None,
+        sort_kind: str | None = None,
         descending: bool = False,
     ) -> list[Record]:
         needle = query.casefold()
@@ -358,14 +373,26 @@ class InMemoryStore:
             if needle in haystack:
                 matches.append(record)
         if sort:
-            matches.sort(
-                key=lambda item: (
-                    item.payload.get(sort) is None,
-                    item.payload.get(sort),
-                    item.id,
-                ),
-                reverse=descending,
-            )
+            present = [item for item in matches if item.payload.get(sort) is not None]
+            missing = [item for item in matches if item.payload.get(sort) is None]
+
+            def sort_value(item: Record):
+                value = item.payload[sort]
+                match sort_kind:
+                    case "integer" | "number" | "decimal":
+                        return Decimal(str(value)), item.id
+                    case "date":
+                        return date.fromisoformat(str(value)), item.id
+                    case "datetime":
+                        return datetime.fromisoformat(
+                            str(value).replace("Z", "+00:00")
+                        ), item.id
+                    case _:
+                        return str(value), item.id
+
+            present.sort(key=sort_value, reverse=descending)
+            missing.sort(key=lambda item: item.id, reverse=descending)
+            matches = present + missing
         else:
             matches.sort(key=lambda item: item.id, reverse=descending)
         if cursor:
@@ -549,6 +576,7 @@ class InMemoryStore:
         payload: dict[str, Any],
         policy_action: str,
         ttl_seconds: int,
+        update_mode: str = "patch",
         record_id: str | None = None,
         expected_revision: int | None = None,
         inventory_definition: bool = False,
@@ -584,9 +612,15 @@ class InMemoryStore:
             profile_id=actor.id,
             operation=operation,
             namespace_id=namespace.id,
+            record_id=record_id,
+            record_type=record_type,
             identity_key=identity_key,
             payload=payload,
+            search_text=search_text,
             expected_revision=expected_revision,
+            update_mode=update_mode,
+            valid_from=valid_from,
+            valid_to=valid_to,
         )
         existing_id = self._state.requests_by_key.get(key)
         if existing_id:
@@ -600,6 +634,7 @@ class InMemoryStore:
             record_type=record_type,
             identity_key=identity_key,
             expected_revision=expected_revision,
+            update_mode=update_mode,
             payload=payload,
             search_text=search_text,
             idempotency_key=key,
@@ -675,6 +710,7 @@ class InMemoryStore:
             payload=payload,
             policy_action=policy_action,
             ttl_seconds=ttl_seconds,
+            update_mode="patch",
             valid_from=candidate.valid_from,
             valid_to=candidate.valid_to,
         )
@@ -746,9 +782,13 @@ class InMemoryStore:
             profile_id=actor.id,
             operation="update",
             namespace_id=namespace.id,
+            record_id=record.id,
+            record_type=record.record_type,
             identity_key=record.identity_key,
             payload=payload,
+            search_text=candidate_text,
             expected_revision=record.revision,
+            update_mode="patch",
         )
         key = hashlib.sha256(f"{request_key}|{candidate_id}".encode()).hexdigest()
         now = _now()
@@ -760,6 +800,7 @@ class InMemoryStore:
             record_type=record.record_type,
             identity_key=record.identity_key,
             expected_revision=record.revision,
+            update_mode="patch",
             payload=payload,
             search_text=candidate_text,
             idempotency_key=key,
@@ -1007,20 +1048,21 @@ class PostgresStore:
             record_type=row[4],
             identity_key=row[5],
             expected_revision=row[6],
-            payload=row[7],
-            search_text=row[8],
-            idempotency_key=row[9],
-            status=row[10],
-            policy_action=row[11],
-            requested_by_profile_id=str(row[12]),
-            decided_by_profile_id=str(row[13]) if row[13] else None,
-            requested_at=(row[14] if isinstance(row[14], str) else _iso(row[14])),
-            decided_at=(row[15] if isinstance(row[15], str) else _iso(row[15]))
-            if row[15]
+            update_mode=row[7],
+            payload=row[8],
+            search_text=row[9],
+            idempotency_key=row[10],
+            status=row[11],
+            policy_action=row[12],
+            requested_by_profile_id=str(row[13]),
+            decided_by_profile_id=str(row[14]) if row[14] else None,
+            requested_at=(row[15] if isinstance(row[15], str) else _iso(row[15])),
+            decided_at=(row[16] if isinstance(row[16], str) else _iso(row[16]))
+            if row[16]
             else None,
-            expires_at=(row[16] if isinstance(row[16], str) else _iso(row[16])),
-            valid_from=row[17],
-            valid_to=row[18],
+            expires_at=(row[17] if isinstance(row[17], str) else _iso(row[17])),
+            valid_from=row[18],
+            valid_to=row[19],
         )
 
     def get_or_create_profile(self, slug: str) -> Profile:
@@ -1043,27 +1085,40 @@ class PostgresStore:
         return self._profile(row)
 
     def get_or_create_private_namespace(self, profile: Profile) -> Namespace:
+        slug = f"profile:{profile.slug}"
         with self._connection() as connection:
             row = connection.execute(
-                "SELECT id, slug, kind, owner_profile_id FROM durable_memory.namespace "
-                "WHERE slug = %s",
-                (f"profile:{profile.slug}",),
+                "SELECT id, slug, kind, owner_profile_id "
+                "FROM durable_memory.namespace WHERE slug = %s",
+                (slug,),
             ).fetchone()
             if row:
-                existing = self._namespace(row)
+                namespace = self._namespace(row)
                 if (
-                    existing.kind != "private"
-                    or existing.owner_profile_id != profile.id
+                    namespace.kind != "private"
+                    or namespace.owner_profile_id != profile.id
                 ):
                     raise CommandError(t("private_namespace_taken"))
-                return existing
+                return namespace
             row = connection.execute(
                 "INSERT INTO durable_memory.namespace "
                 "(id, slug, kind, owner_profile_id) VALUES (%s, %s, 'private', %s) "
+                "ON CONFLICT DO NOTHING "
                 "RETURNING id, slug, kind, owner_profile_id",
-                (_new_id(), f"profile:{profile.slug}", profile.id),
+                (_new_id(), slug, profile.id),
             ).fetchone()
-        return self._namespace(row)
+            if not row:
+                row = connection.execute(
+                    "SELECT id, slug, kind, owner_profile_id "
+                    "FROM durable_memory.namespace WHERE slug = %s",
+                    (slug,),
+                ).fetchone()
+        if not row:
+            raise CommandError(t("private_namespace_taken"))
+        namespace = self._namespace(row)
+        if namespace.kind != "private" or namespace.owner_profile_id != profile.id:
+            raise CommandError(t("private_namespace_taken"))
+        return namespace
 
     def create_namespace(self, *, owner: Profile, slug: str, kind: str) -> Namespace:
         if kind not in NAMESPACE_KINDS:
@@ -1306,6 +1361,7 @@ class PostgresStore:
         include_inventory: bool = False,
         cursor: str | None = None,
         sort: str | None = None,
+        sort_kind: str | None = None,
         descending: bool = False,
     ) -> list[Record]:
         params: list[Any] = []
@@ -1330,32 +1386,58 @@ class PostgresStore:
             filter_sql, filter_params = self._filter_sql(filters)
             condition += filter_sql
             params.extend(filter_params)
-        if cursor and sort:
-            comparator = "<" if descending else ">"
-            condition += (
-                f" AND (payload ->> %s, id) {comparator} "
-                "((SELECT payload ->> %s FROM durable_memory.record "
-                "WHERE id = %s::uuid), %s::uuid)"
-            )
-            params.extend((sort, sort, cursor, cursor))
-        elif cursor:
-            condition += " AND id > %s::uuid"
-            params.append(cursor)
-        order = " ORDER BY id"
-        if sort:
-            direction = "DESC" if descending else "ASC"
-            order = f" ORDER BY payload ->> %s {direction} NULLS LAST, id {direction}"
-            params.append(sort)
-        elif descending:
-            order = " ORDER BY id DESC"
-        if query.strip():
-            order = (
-                " ORDER BY ts_rank_cd(to_tsvector('simple', search_text || ' ' || "
-                "identity_key), plainto_tsquery('simple', %s)) DESC, id"
-            )
-            params.append(query)
-        params.append(limit)
+        sort_expression = {
+            "integer": "(payload ->> %s)::numeric",
+            "number": "(payload ->> %s)::numeric",
+            "decimal": "(payload ->> %s)::numeric",
+            "date": "(payload ->> %s)::date",
+            "datetime": "(payload ->> %s)::timestamptz",
+        }.get(sort_kind, "payload ->> %s")
         with self._connection() as connection:
+            if cursor and sort:
+                cursor_row = connection.execute(
+                    "WITH cursor_record AS MATERIALIZED ("
+                    "SELECT payload FROM durable_memory.record "
+                    f"{condition} AND id = %s::uuid) "
+                    f"SELECT {sort_expression} FROM cursor_record",
+                    (*params, cursor, sort),
+                ).fetchone()
+                if not cursor_row:
+                    raise CommandError("Search cursor is invalid for this result set.")
+                comparator = "<" if descending else ">"
+                cursor_value = cursor_row[0]
+                if cursor_value is None:
+                    condition += (
+                        f" AND {sort_expression} IS NULL AND id {comparator} %s::uuid"
+                    )
+                    params.extend((sort, cursor))
+                else:
+                    condition += (
+                        f" AND ({sort_expression} IS NULL OR "
+                        f"{sort_expression} {comparator} %s OR "
+                        f"({sort_expression} = %s AND id {comparator} %s::uuid))"
+                    )
+                    params.extend(
+                        (sort, sort, cursor_value, sort, cursor_value, cursor)
+                    )
+            elif cursor:
+                comparator = "<" if descending else ">"
+                condition += f" AND id {comparator} %s::uuid"
+                params.append(cursor)
+            order = " ORDER BY id"
+            if sort:
+                direction = "DESC" if descending else "ASC"
+                order = f" ORDER BY {sort_expression} {direction} NULLS LAST, id {direction}"
+                params.append(sort)
+            elif descending:
+                order = " ORDER BY id DESC"
+            if query.strip() and not sort:
+                order = (
+                    " ORDER BY ts_rank_cd(to_tsvector('simple', search_text || ' ' || "
+                    "identity_key), plainto_tsquery('simple', %s)) DESC, id"
+                )
+                params.append(query)
+            params.append(limit)
             rows = connection.execute(
                 self._record_sql(condition) + order + " LIMIT %s", params
             ).fetchall()
@@ -1575,17 +1657,23 @@ class PostgresStore:
             "embedding_job",
             "candidate_embedding",
             "candidate_embedding_job",
+            "import_checkpoint",
             "memory_type",
             "memory_schema_version",
         )
+        authority_tables = ("profile", *sensitive_tables)
         required_functions = (
             "current_profile_id",
             "has_capability",
             "submit_change_request",
             "decide_change_request",
             "proposal_inventory_definition",
+            "current_operation_policy",
+            "save_import_checkpoint",
+            "load_import_checkpoint",
         )
         protected_tables = (
+            "profile",
             "record",
             "record_revision",
             "change_request",
@@ -1611,13 +1699,13 @@ class PostgresStore:
                 "c.relowner::regrole::text = session_user "
                 "FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace "
                 "WHERE n.nspname = 'durable_memory' AND c.relname = ANY(%s)",
-                (list(sensitive_tables),),
+                (list(authority_tables),),
             ).fetchall()
             found = {row[0] for row in table_rows}
             for name, rls, _force_rls, owned in table_rows:
-                if not rls or owned:
+                if (name in sensitive_tables and not rls) or owned:
                     checks.append(f"unsafe table configuration: {name}")
-            for name in set(sensitive_tables) - found:
+            for name in set(authority_tables) - found:
                 checks.append(f"missing table: {name}")
             extensions = {
                 row[0]
@@ -1647,7 +1735,13 @@ class PostgresStore:
                 "SELECT has_table_privilege(session_user, 'durable_memory.record', 'SELECT'), "
                 "has_table_privilege(session_user, 'durable_memory.memory_candidate', 'INSERT'), "
                 "has_table_privilege(session_user, 'durable_memory.memory_type', 'SELECT'), "
-                "has_function_privilege(session_user, 'durable_memory.submit_change_request(uuid, uuid, text, text, text, jsonb, text, integer, timestamptz, timestamptz, text)', 'EXECUTE'), "
+                "has_function_privilege(session_user, 'durable_memory.submit_change_request(uuid, uuid, text, text, text, jsonb, text, integer, timestamptz, timestamptz, text, text)', 'EXECUTE'), "
+                "COALESCE(has_function_privilege(session_user, "
+                "to_regprocedure('durable_memory.save_import_checkpoint(text, text, text, jsonb)'), "
+                "'EXECUTE'), false), "
+                "COALESCE(has_function_privilege(session_user, "
+                "to_regprocedure('durable_memory.load_import_checkpoint(text, text)'), "
+                "'EXECUTE'), false), "
                 "NOT has_function_privilege(session_user, 'durable_memory.apply_change_request(uuid, text, boolean)', 'EXECUTE')"
             ).fetchone()
             for label, granted in zip(
@@ -1656,6 +1750,8 @@ class PostgresStore:
                     "memory_candidate INSERT",
                     "memory_type SELECT",
                     "submit_change_request EXECUTE",
+                    "save_import_checkpoint EXECUTE",
+                    "load_import_checkpoint EXECUTE",
                     "apply_change_request EXECUTE revoked",
                 ),
                 grant_rows,
@@ -1682,10 +1778,43 @@ class PostgresStore:
                 )
         return {"applicable": True, "ok": not checks, "checks": checks}
 
+    def operation_policy(self) -> ApprovalPolicy:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT operation, action, ttl_seconds "
+                "FROM durable_memory.current_operation_policy()"
+            ).fetchall()
+        actions = {row[0]: row[1] for row in rows}
+        ttl_values = {row[2] for row in rows}
+        if set(actions) != OPERATIONS or len(ttl_values) != 1:
+            raise CommandError("PostgreSQL operation policy is incomplete.")
+        return ApprovalPolicy(
+            create=actions["create"],
+            update=actions["update"],
+            delete=actions["delete"],
+            ttl_seconds=ttl_values.pop(),
+        )
+
     def pending_embedding_jobs(
         self, *, profile: Profile, limit: int
     ) -> list[dict[str, Any]]:
         with self._connection() as connection:
+            connection.execute(
+                "WITH recovered AS (UPDATE durable_memory.embedding_job "
+                "SET status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'pending' END, "
+                "last_error = CASE WHEN attempts >= max_attempts THEN "
+                "'embedding lease expired' ELSE NULL END, "
+                "failed_at = CASE WHEN attempts >= max_attempts THEN now() ELSE NULL END, "
+                "claim_token = NULL, claimed_at = NULL, lease_expires_at = NULL "
+                "WHERE status = 'processing' "
+                "AND (lease_expires_at IS NULL OR lease_expires_at < now()) "
+                "RETURNING record_id, revision, status, last_error) "
+                "UPDATE durable_memory.record_embedding AS projection "
+                "SET lifecycle_status = recovered.status, error_message = recovered.last_error, "
+                "failed_at = CASE WHEN recovered.status = 'failed' THEN now() ELSE NULL END "
+                "FROM recovered WHERE (projection.record_id, projection.revision) = "
+                "(recovered.record_id, recovered.revision)"
+            )
             rows = connection.execute(
                 "WITH claimed AS (SELECT job.record_id, job.revision "
                 "FROM durable_memory.embedding_job AS job "
@@ -1693,7 +1822,8 @@ class PostgresStore:
                 "ON (projection.record_id, projection.revision) = "
                 "(job.record_id, job.revision) "
                 "JOIN durable_memory.record AS record ON record.id = job.record_id "
-                "WHERE job.status = 'pending' AND record.status = 'active' "
+                "WHERE job.status = 'pending' AND job.attempts < job.max_attempts "
+                "AND record.status = 'active' "
                 "AND record.valid_from <= now() "
                 "AND (record.valid_to IS NULL OR record.valid_to > now()) "
                 "AND record.record_type <> '__inventory_definition__' "
@@ -1791,35 +1921,81 @@ class PostgresStore:
         """Make a bounded, explicit retry set without discarding failure history."""
         with self._connection() as connection:
             rows = connection.execute(
-                "SELECT job.record_id, job.revision FROM "
+                "SELECT job.record_id, job.revision, job.status, job.attempts, "
+                "job.max_attempts, job.last_error FROM "
                 "durable_memory.embedding_job AS job "
                 "JOIN durable_memory.record AS record ON record.id = job.record_id "
-                "WHERE job.status = 'failed' AND record.status = 'active' "
+                "WHERE (job.status = 'failed' "
+                "OR (job.status = 'processing' "
+                "AND (job.lease_expires_at IS NULL OR job.lease_expires_at < now()))) "
+                "AND record.status = 'active' "
                 "AND record.valid_from <= now() "
                 "AND (record.valid_to IS NULL OR record.valid_to > now()) "
                 "AND record.record_type <> '__inventory_definition__' "
                 "AND record.revision = job.revision "
-                "ORDER BY job.failed_at, job.record_id LIMIT %s FOR UPDATE OF job",
+                "ORDER BY COALESCE(job.failed_at, job.lease_expires_at), job.record_id "
+                "LIMIT %s FOR UPDATE OF job",
                 (limit,),
             ).fetchall()
-            for record_id, revision in rows:
+            requeued = 0
+            for record_id, revision, status, attempts, max_attempts, last_error in rows:
+                explicit_retry = status == "failed"
+                exhausted = status == "processing" and attempts >= max_attempts
+                next_status = "failed" if exhausted else "pending"
+                next_attempts = 0 if explicit_retry else attempts
+                diagnostic = (
+                    "embedding lease expired"
+                    if exhausted
+                    else last_error
+                    if status == "failed"
+                    else None
+                )
                 connection.execute(
-                    "UPDATE durable_memory.embedding_job SET status = 'pending' "
+                    "UPDATE durable_memory.embedding_job SET status = %s, attempts = %s, "
+                    "last_error = %s, failed_at = CASE WHEN %s = 'failed' "
+                    "THEN now() ELSE NULL END, claim_token = NULL, claimed_at = NULL, "
+                    "lease_expires_at = NULL "
                     "WHERE record_id = %s AND revision = %s",
-                    (record_id, revision),
+                    (
+                        next_status,
+                        next_attempts,
+                        diagnostic,
+                        next_status,
+                        record_id,
+                        revision,
+                    ),
                 )
                 connection.execute(
                     "UPDATE durable_memory.record_embedding "
-                    "SET lifecycle_status = 'pending' WHERE record_id = %s "
+                    "SET lifecycle_status = %s, error_message = %s, "
+                    "failed_at = CASE WHEN %s = 'failed' THEN now() ELSE NULL END "
+                    "WHERE record_id = %s "
                     "AND revision = %s",
-                    (record_id, revision),
+                    (next_status, diagnostic, next_status, record_id, revision),
                 )
-        return len(rows)
+                if next_status == "pending":
+                    requeued += 1
+        return requeued
 
     def pending_candidate_embedding_jobs(
         self, *, profile: Profile, limit: int
     ) -> list[dict[str, Any]]:
         with self._connection() as connection:
+            connection.execute(
+                "WITH recovered AS (UPDATE durable_memory.candidate_embedding_job "
+                "SET status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'pending' END, "
+                "last_error = CASE WHEN attempts >= max_attempts THEN "
+                "'candidate embedding lease expired' ELSE NULL END, "
+                "failed_at = CASE WHEN attempts >= max_attempts THEN now() ELSE NULL END, "
+                "claim_token = NULL, claimed_at = NULL, lease_expires_at = NULL "
+                "WHERE status = 'processing' "
+                "AND (lease_expires_at IS NULL OR lease_expires_at < now()) "
+                "RETURNING candidate_id, status, last_error) "
+                "UPDATE durable_memory.candidate_embedding AS projection "
+                "SET lifecycle_status = recovered.status, error_message = recovered.last_error, "
+                "failed_at = CASE WHEN recovered.status = 'failed' THEN now() ELSE NULL END "
+                "FROM recovered WHERE projection.candidate_id = recovered.candidate_id"
+            )
             rows = connection.execute(
                 "WITH claimed AS (SELECT job.candidate_id "
                 "FROM durable_memory.candidate_embedding_job AS job "
@@ -1827,10 +2003,12 @@ class PostgresStore:
                 "ON projection.candidate_id = job.candidate_id "
                 "JOIN durable_memory.memory_candidate AS candidate "
                 "ON candidate.id = job.candidate_id "
-                "WHERE job.status = 'pending' AND candidate.assessment = 'new' "
+                "WHERE job.status = 'pending' AND job.attempts < job.max_attempts "
+                "AND candidate.assessment = 'new' "
                 "AND projection.lifecycle_status = 'pending' "
                 "AND candidate.submitted_by_profile_id = durable_memory.current_profile_id() "
-                "ORDER BY job.created_at, job.candidate_id LIMIT %s FOR UPDATE SKIP LOCKED) "
+                "ORDER BY job.created_at, job.candidate_id "
+                "LIMIT %s FOR UPDATE OF job SKIP LOCKED) "
                 "UPDATE durable_memory.candidate_embedding_job AS job "
                 "SET status = 'processing', attempts = attempts + 1, claim_token = gen_random_uuid(), "
                 "claimed_at = now(), lease_expires_at = now() + interval '15 minutes' "
@@ -1895,7 +2073,8 @@ class PostgresStore:
                 if candidate_row:
                     request_id = connection.execute(
                         "SELECT durable_memory.submit_change_request("
-                        "%s, NULL, 'create', %s, %s, %s::jsonb, %s, NULL, NULL, NULL, %s)",
+                        "%s, NULL, 'create', %s, %s, %s::jsonb, %s, NULL, "
+                        "NULL, NULL, 'patch', %s)",
                         (
                             candidate_row[0],
                             candidate_row[1],
@@ -1955,29 +2134,106 @@ class PostgresStore:
         """Make failed candidate assessments retryable without clearing diagnostics."""
         with self._connection() as connection:
             rows = connection.execute(
-                "SELECT job.candidate_id FROM "
+                "SELECT job.candidate_id, job.status, job.attempts, job.max_attempts, "
+                "job.last_error FROM "
                 "durable_memory.candidate_embedding_job AS job "
                 "JOIN durable_memory.memory_candidate AS candidate "
                 "ON candidate.id = job.candidate_id "
                 "WHERE (job.status = 'failed' OR (job.status = 'processing' "
-                "AND job.claimed_at < now() - interval '5 minutes')) "
+                "AND (job.lease_expires_at IS NULL OR job.lease_expires_at < now()))) "
                 "AND candidate.assessment = 'new' "
-                "ORDER BY job.failed_at, job.candidate_id LIMIT %s FOR UPDATE OF job",
+                "ORDER BY COALESCE(job.failed_at, job.lease_expires_at), job.candidate_id "
+                "LIMIT %s FOR UPDATE OF job",
                 (limit,),
             ).fetchall()
-            for (candidate_id,) in rows:
+            requeued = 0
+            for candidate_id, status, attempts, max_attempts, last_error in rows:
+                explicit_retry = status == "failed"
+                exhausted = status == "processing" and attempts >= max_attempts
+                next_status = "failed" if exhausted else "pending"
+                next_attempts = 0 if explicit_retry else attempts
+                diagnostic = (
+                    "candidate embedding lease expired"
+                    if exhausted
+                    else last_error
+                    if explicit_retry
+                    else None
+                )
                 connection.execute(
                     "UPDATE durable_memory.candidate_embedding_job "
-                    "SET status = 'pending' "
+                    "SET status = %s, attempts = %s, last_error = %s, "
+                    "failed_at = CASE WHEN %s = 'failed' THEN now() ELSE NULL END, "
+                    "claim_token = NULL, claimed_at = NULL, lease_expires_at = NULL "
                     "WHERE candidate_id = %s",
-                    (candidate_id,),
+                    (next_status, next_attempts, diagnostic, next_status, candidate_id),
                 )
                 connection.execute(
                     "UPDATE durable_memory.candidate_embedding "
-                    "SET lifecycle_status = 'pending' WHERE candidate_id = %s",
-                    (candidate_id,),
+                    "SET lifecycle_status = %s, error_message = %s, "
+                    "failed_at = CASE WHEN %s = 'failed' THEN now() ELSE NULL END "
+                    "WHERE candidate_id = %s",
+                    (next_status, diagnostic, next_status, candidate_id),
                 )
-        return len(rows)
+                if next_status == "pending":
+                    requeued += 1
+        return requeued
+
+    def _submit_change_request(
+        self,
+        connection,
+        *,
+        actor: Profile,
+        namespace: Namespace,
+        operation: str,
+        record_type: str,
+        identity_key: str,
+        search_text: str,
+        payload: dict[str, Any],
+        update_mode: str,
+        record_id: str | None = None,
+        expected_revision: int | None = None,
+        valid_from: datetime | None = None,
+        valid_to: datetime | None = None,
+    ) -> ChangeRequest:
+        if operation != "create":
+            record_type = record_type if record_type != "fact" else ""
+            identity_key = identity_key or ""
+        key = idempotency_key(
+            profile_id=actor.id,
+            operation=operation,
+            namespace_id=namespace.id,
+            record_id=record_id,
+            record_type=record_type,
+            identity_key=identity_key,
+            payload=payload,
+            search_text=search_text,
+            expected_revision=expected_revision,
+            update_mode=update_mode,
+            valid_from=valid_from,
+            valid_to=valid_to,
+        )
+        request_id = connection.execute(
+            "SELECT durable_memory.submit_change_request(%s, %s, %s, %s, %s, "
+            "%s::jsonb, %s, %s, %s, %s, %s, %s)",
+            (
+                namespace.id,
+                record_id,
+                operation,
+                record_type,
+                identity_key,
+                json.dumps(payload),
+                search_text,
+                expected_revision,
+                valid_from,
+                valid_to,
+                update_mode,
+                key,
+            ),
+        ).fetchone()[0]
+        row = connection.execute(
+            self._request_sql("WHERE id = %s"), (request_id,)
+        ).fetchone()
+        return self._request(row)
 
     def propose(
         self,
@@ -1991,6 +2247,7 @@ class PostgresStore:
         payload: dict[str, Any],
         policy_action: str,
         ttl_seconds: int,
+        update_mode: str = "patch",
         record_id: str | None = None,
         expected_revision: int | None = None,
         inventory_definition: bool = False,
@@ -2002,43 +2259,22 @@ class PostgresStore:
         if record_type == INVENTORY_DEFINITION_TYPE and not inventory_definition:
             raise CommandError(t("inventory_definition_immutable"))
         self.require_capability(actor, namespace, "propose")
-        if operation != "create":
-            # PostgreSQL derives the target identity, type, merged payload, and
-            # revision checks without exposing the target's canonical payload.
-            record_type = record_type if record_type != "fact" else ""
-            identity_key = identity_key or ""
         with self._connection() as connection:
-            key = idempotency_key(
-                profile_id=actor.id,
+            return self._submit_change_request(
+                connection,
+                actor=actor,
+                namespace=namespace,
                 operation=operation,
-                namespace_id=namespace.id,
+                record_type=record_type,
                 identity_key=identity_key,
+                search_text=search_text,
                 payload=payload,
+                update_mode=update_mode,
+                record_id=record_id,
                 expected_revision=expected_revision,
                 valid_from=valid_from,
                 valid_to=valid_to,
             )
-            request_id = connection.execute(
-                "SELECT durable_memory.submit_change_request(%s, %s, %s, %s, %s, "
-                "%s::jsonb, %s, %s, %s, %s, %s)",
-                (
-                    namespace.id,
-                    record_id,
-                    operation,
-                    record_type,
-                    identity_key,
-                    json.dumps(payload),
-                    search_text,
-                    expected_revision,
-                    valid_from,
-                    valid_to,
-                    key,
-                ),
-            ).fetchone()[0]
-            row = connection.execute(
-                self._request_sql("WHERE id = %s"), (request_id,)
-            ).fetchone()
-        return self._request(row)
 
     def submit_candidate(
         self,
@@ -2085,7 +2321,8 @@ class PostgresStore:
             if assessment.status == "new" and not (
                 semantic_required and semantic_required[0]
             ):
-                request = self.propose(
+                request = self._submit_change_request(
+                    connection,
                     actor=actor,
                     namespace=namespace,
                     operation="create",
@@ -2093,8 +2330,7 @@ class PostgresStore:
                     identity_key=candidate.identity_key,
                     search_text=search_text,
                     payload=payload,
-                    policy_action=policy_action,
-                    ttl_seconds=ttl_seconds,
+                    update_mode="patch",
                     valid_from=candidate.valid_from,
                     valid_to=candidate.valid_to,
                 )
@@ -2179,7 +2415,7 @@ class PostgresStore:
     def _request_sql(condition: str = "") -> str:
         return (
             "SELECT id, namespace_id, record_id, operation, record_type, identity_key, "
-            "expected_revision, payload, search_text, idempotency_key, status, "
+            "expected_revision, update_mode, payload, search_text, idempotency_key, status, "
             "policy_action, requested_by_profile_id, decided_by_profile_id, "
             "requested_at, decided_at, expires_at, valid_from, valid_to "
             "FROM durable_memory.change_request " + condition

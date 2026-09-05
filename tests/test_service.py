@@ -17,6 +17,7 @@ from hermes_durable_memory.service import DurableMemory
 from hermes_durable_memory.store import (
     InMemoryStore,
     PostgresStore,
+    idempotency_key,
     validate_embedding,
 )
 
@@ -33,6 +34,152 @@ def _memory(profile: str, store: InMemoryStore, **policy: str) -> DurableMemory:
 
 
 class DurableMemoryTests(unittest.TestCase):
+    def test_idempotency_fingerprint_is_structured_and_complete(self) -> None:
+        # Given
+        base = {
+            "profile_id": "profile",
+            "operation": "create",
+            "namespace_id": "namespace",
+            "record_id": None,
+            "record_type": "person",
+            "identity_key": "person:ada",
+            "payload": {"name": "Ada"},
+            "search_text": "Ada",
+            "expected_revision": None,
+            "update_mode": "patch",
+        }
+
+        # When
+        keys = {
+            idempotency_key(**base),
+            idempotency_key(**{**base, "search_text": "Alias"}),
+            idempotency_key(
+                **{**base, "valid_from": datetime(2026, 1, 1, tzinfo=timezone.utc)}
+            ),
+            idempotency_key(**{**base, "namespace_id": "other"}),
+            idempotency_key(**{**base, "payload": {"name": "Lin"}}),
+            idempotency_key(**{**base, "record_type": "a|b", "identity_key": "c"}),
+            idempotency_key(**{**base, "record_type": "a", "identity_key": "b|c"}),
+        }
+
+        # Then
+        self.assertEqual(len(keys), 7)
+
+    def test_in_memory_proposal_forwards_validity_to_idempotency(self) -> None:
+        # Given
+        store = InMemoryStore()
+        profile = store.get_or_create_profile("alpha")
+        namespace = store.get_or_create_private_namespace(profile)
+        valid_from = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+        # When
+        first = store.propose(
+            actor=profile,
+            namespace=namespace,
+            operation="create",
+            record_type="fact",
+            identity_key="validity:first",
+            search_text="same",
+            payload={"identity": "validity:first"},
+            policy_action="require",
+            ttl_seconds=60,
+            valid_from=valid_from,
+        )
+        second = store.propose(
+            actor=profile,
+            namespace=namespace,
+            operation="create",
+            record_type="fact",
+            identity_key="validity:first",
+            search_text="same",
+            payload={"identity": "validity:first"},
+            policy_action="require",
+            ttl_seconds=60,
+            valid_from=valid_from + timedelta(days=1),
+        )
+
+        # Then
+        self.assertEqual(
+            (first.id == second.id, first.valid_from, second.valid_from),
+            (False, valid_from, valid_from + timedelta(days=1)),
+        )
+
+    def test_in_memory_descending_schema_sort_keeps_nulls_last(self) -> None:
+        # Given
+        memory = _memory("alpha", InMemoryStore(), create="auto")
+        memory.execute_payload(
+            "create-inventory --type ranked --fields "
+            '\'{"name":{"kind":"string","searchable":true},'
+            '"priority":{"kind":"integer","filterable":true}}\''
+        )
+        for identity, payload in (
+            ("ranked:two", '{"name":"Item","priority":2}'),
+            ("ranked:null", '{"name":"Item"}'),
+            ("ranked:one", '{"name":"Item","priority":1}'),
+        ):
+            memory.execute_payload(
+                f"propose --operation create --type ranked --identity {identity} "
+                f"--payload '{payload}'"
+            )
+
+        # When
+        records = memory.search(
+            "Item",
+            namespace_slug="profile:alpha",
+            record_type="ranked",
+            sort="priority",
+            descending=True,
+        )["records"]
+
+        # Then
+        self.assertEqual(
+            [record["identity"] for record in records],
+            ["ranked:two", "ranked:one", "ranked:null"],
+        )
+
+    def test_ranked_search_rejects_id_only_cursor(self) -> None:
+        # Given
+        memory = _memory("alpha", InMemoryStore(), create="auto")
+        for identity in ("ranked:first", "ranked:second"):
+            memory.execute_payload(
+                f"propose --operation create --identity {identity} --text ranked"
+            )
+        cursor = memory.search("ranked", limit=1)["next_cursor"]
+
+        # When / Then
+        with self.assertRaises(CommandError):
+            memory.search("ranked", limit=1, cursor=cursor)
+
+    def test_schema_sort_requires_explicit_namespace(self) -> None:
+        # Given
+        memory = _memory("alpha", InMemoryStore(), create="auto")
+        memory.execute_payload(
+            "create-inventory --type scoped --fields "
+            '\'{"priority":{"kind":"integer","filterable":true}}\''
+        )
+
+        # When / Then
+        with self.assertRaises(CommandError):
+            memory.search("", record_type="scoped", sort="priority")
+
+    def test_doctor_preserves_policy_shape_when_postgres_is_unavailable(self) -> None:
+        # Given
+        memory = DurableMemory(
+            settings=Settings(
+                store="postgres",
+                profile="alpha",
+                policy=ApprovalPolicy(create="auto"),
+                database_url="postgresql://unavailable",
+            )
+        )
+
+        # When
+        with patch.object(memory, "store", side_effect=CommandError("offline")):
+            result = memory.doctor()
+
+        # Then
+        self.assertEqual(result["policy"], ApprovalPolicy(create="auto").as_dict())
+
     def test_expired_candidate_record_is_hidden_without_data_deletion(self) -> None:
         store = InMemoryStore()
         memory = _memory("alpha", store, create="auto")
@@ -261,7 +408,10 @@ class DurableMemoryTests(unittest.TestCase):
                 f'--payload \'{{"title":"Task","priority":{priority}}}\''
             )
         result = memory.search(
-            "Task", record_type="task", filters={"priority": {"gte": 2}}
+            "Task",
+            namespace_slug="profile:alpha",
+            record_type="task",
+            filters={"priority": {"gte": 2}},
         )
         self.assertEqual([item["identity"] for item in result["records"]], ["task:two"])
 
@@ -292,7 +442,11 @@ class DurableMemoryTests(unittest.TestCase):
             )
 
         result = memory.search(
-            "Task", record_type="task", filters={"priority": {"gte": 59}}, limit=1
+            "Task",
+            namespace_slug="profile:alpha",
+            record_type="task",
+            filters={"priority": {"gte": 59}},
+            limit=1,
         )
 
         self.assertEqual([item["identity"] for item in result["records"]], ["task:059"])
@@ -308,11 +462,12 @@ class DurableMemoryTests(unittest.TestCase):
             '--payload \'{"name":"Ada","age":37}\''
         )
         record = memory.search("person:ada")["records"][0]
-        memory.execute_payload(
+        patched = memory.execute_payload(
             f"propose --operation update --record-id {record['id']} "
             "--payload '{\"age\":38}'"
         )
         updated = memory.search("person:ada")["records"][0]
+        self.assertEqual(patched["update_mode"], "patch")
         self.assertEqual(updated["payload"]["name"], "Ada")
         self.assertEqual(updated["payload"]["age"], 38)
         with self.assertRaises(CommandError):
@@ -390,12 +545,19 @@ class DurableMemoryTests(unittest.TestCase):
                 f"propose --operation create --type task --identity {identity} "
                 f'--payload \'{{"title":"Task","priority":{priority}}}\''
             )
-        first = memory.search("Task", record_type="task", sort="priority", limit=2)
+        first = memory.search(
+            "Task",
+            namespace_slug="profile:alpha",
+            record_type="task",
+            sort="priority",
+            limit=2,
+        )
         self.assertEqual(
             [item["identity"] for item in first["records"]], ["task:one", "task:two"]
         )
         second = memory.search(
             "Task",
+            namespace_slug="profile:alpha",
             record_type="task",
             cursor=first["next_cursor"],
             sort="priority",
@@ -802,12 +964,18 @@ class DurableMemoryTests(unittest.TestCase):
             '--payload \'{"name":"Ada"}\''
         )
         result = memory.search(
-            "Ada", record_type="person", filters={"name": {"in": ["Ada"]}}
+            "Ada",
+            namespace_slug="profile:alpha",
+            record_type="person",
+            filters={"name": {"in": ["Ada"]}},
         )
         self.assertEqual(result["records"][0]["identity"], "person:ada")
         with self.assertRaises(CommandError):
             memory.search(
-                "Ada", record_type="person", filters={"name": {"regex": ".*"}}
+                "Ada",
+                namespace_slug="profile:alpha",
+                record_type="person",
+                filters={"name": {"regex": ".*"}},
             )
 
 
