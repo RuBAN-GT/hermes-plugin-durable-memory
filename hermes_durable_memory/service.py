@@ -1033,6 +1033,10 @@ class DurableMemory:
             migrator.grant_runtime(plan.runtime.user)
         result = DurableMemory(settings=settings).doctor()
         if not result["postgres_ready"]:
+            checks = result.get("deployment_preflight", {}).get("checks", [])
+            details = "; ".join(str(check) for check in checks)
+            if details:
+                raise CommandError(f"Database preflight failed: {details}")
             raise CommandError(t("setup_preflight_failed", language="en"))
         return result
 

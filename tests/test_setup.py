@@ -279,6 +279,28 @@ class SetupPlanTests(unittest.TestCase):
             names = [call[0] for call in migrator.return_value.method_calls]
             self.assertEqual(names, ["migrate", "bootstrap_profile", "grant_runtime"])
 
+    def test_setup_reports_safe_preflight_checks(self):
+        plan = SetupPlan("test", account(), account("owner"))
+        with (
+            patch("hermes_durable_memory.setup_plan.provision_database"),
+            patch("psycopg.connect") as connect,
+            patch("hermes_durable_memory.service.DatabaseMigrator"),
+            patch.object(
+                DurableMemory,
+                "doctor",
+                return_value={
+                    "postgres_ready": False,
+                    "deployment_preflight": {"checks": ["missing table: record"]},
+                },
+            ),
+        ):
+            connect.return_value.__enter__.return_value.execute.return_value.fetchone.side_effect = [
+                ("runtime",),
+                ("owner",),
+            ]
+            with self.assertRaisesRegex(CommandError, "missing table: record"):
+                DurableMemory.setup_database(plan)
+
     def test_provision_does_not_change_existing_passwords_or_owners(self):
         plan = SetupPlan("test", account(), account("owner"), admin=account("admin"))
         with patch("psycopg.connect") as connect:
