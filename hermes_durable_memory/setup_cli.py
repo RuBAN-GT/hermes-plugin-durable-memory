@@ -254,11 +254,11 @@ def run_setup(
             return
         stage = "setup_stage_database"
         print(t(stage))
-        result = DurableMemory.setup_database(plan)
+        DurableMemory.setup_database(plan)
         stage = "setup_stage_files"
         _check_managed(home, values, activate)
         files.commit(rendered)
-        print(result["message"])
+        print(t("setup_database_ready"))
         print(t("setup_complete", home=home, profile=selected))
     except (KeyboardInterrupt, EOFError):
         raise SystemExit(t("setup_interrupted", stage=t(stage))) from None

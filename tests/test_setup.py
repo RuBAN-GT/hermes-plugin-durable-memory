@@ -495,6 +495,7 @@ class SetupCLITests(unittest.TestCase):
             self.assertEqual(
                 saved["DURABLE_MEMORY_DANGER_ALLOW_UNSAFE_RUNTIME"], "true"
             )
+            self.assertIn("Database is ready.", output)
             self.assertNotIn("secret-never-print", output)
 
     def test_prefilled_options_skip_their_questions(self):

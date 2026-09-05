@@ -42,6 +42,7 @@ _MESSAGES = {
         "setup_stage_questions": "collecting settings",
         "setup_stage_database": "preparing and checking the database",
         "setup_stage_files": "saving profile files",
+        "setup_database_ready": "Database is ready.",
         "setup_complete": "Saved to {home}/.env; plugin enabled. Restart the selected profile gateway with your process manager and run /durable-memory doctor there. For optional approval buttons, run hermes -p {profile} plugins enable durable-memory and use the standard consent prompt. No service was restarted.",
         "setup_tty_required": "Setup requires an interactive terminal. Passwords cannot be passed as arguments.",
         "setup_profile_conflict": "Profile environment conflicts with the selection. Start Hermes explicitly in the intended profile.",
