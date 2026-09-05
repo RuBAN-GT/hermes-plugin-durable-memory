@@ -6,7 +6,7 @@ import hashlib
 import re
 import uuid
 from dataclasses import dataclass
-from importlib.resources import files
+from pathlib import Path
 
 from .database import DEFAULT_SCHEMA, SchemaConnection, rewrite_schema, validate_schema
 from .i18n import t
@@ -14,6 +14,7 @@ from .models import OPERATIONS, CommandError
 from .policies import ApprovalPolicy
 
 _MIGRATION_NAME = re.compile(r"^(?P<version>\d+)_(?P<name>[a-z0-9_]+)\.sql$")
+_RESOURCE_DIR = Path(__file__).parent
 
 
 @dataclass(frozen=True)
@@ -198,10 +199,8 @@ class DatabaseMigrator:
         import psycopg
         from psycopg import sql
 
-        grants = (
-            files("hermes_durable_memory")
-            .joinpath("resources/runtime_grants.sql")
-            .read_text(encoding="utf-8")
+        grants = (_RESOURCE_DIR / "resources" / "runtime_grants.sql").read_text(
+            encoding="utf-8"
         )
         grants = rewrite_schema(grants, self._schema)
         with self._connection(psycopg) as connection:
@@ -220,7 +219,7 @@ class DatabaseMigrator:
                     )
 
     def _migrations(self) -> list[Migration]:
-        sql_dir = files("hermes_durable_memory").joinpath("sql")
+        sql_dir = _RESOURCE_DIR / "sql"
         migrations: list[Migration] = []
         for path in sql_dir.iterdir():
             match = _MIGRATION_NAME.match(path.name)
