@@ -610,6 +610,27 @@ class PostgreSQLMigrationTests(unittest.TestCase):
         store = PostgresStore(_role_url("durable_memory_alpha"))
         self.assertTrue(store.deployment_preflight()["ok"])
 
+    def test_danger_preflight_allows_owner_but_still_requires_rls(self) -> None:
+        store = PostgresStore(_DATABASE_URL)
+        self.assertFalse(store.deployment_preflight()["ok"])
+        result = store.deployment_preflight(allow_unsafe_runtime=True)
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["unsafe_runtime"])
+        self.assertTrue(result["warnings"])
+        with self.psycopg.connect(_DATABASE_URL) as connection:
+            connection.execute(
+                "ALTER TABLE durable_memory.record DISABLE ROW LEVEL SECURITY"
+            )
+        try:
+            result = store.deployment_preflight(allow_unsafe_runtime=True)
+            self.assertFalse(result["ok"])
+            self.assertIn("unsafe table configuration: record", result["checks"])
+        finally:
+            with self.psycopg.connect(_DATABASE_URL) as connection:
+                connection.execute(
+                    "ALTER TABLE durable_memory.record ENABLE ROW LEVEL SECURITY"
+                )
+
     def test_postgres_deployment_preflight_rejects_bypass_rls(self) -> None:
         store = PostgresStore(_role_url("durable_memory_alpha"))
         with self.psycopg.connect(_DATABASE_URL) as connection:

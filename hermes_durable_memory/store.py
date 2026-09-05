@@ -1643,7 +1643,9 @@ class PostgresStore:
                 (source, scope, checkpoint, json.dumps(report)),
             )
 
-    def deployment_preflight(self) -> dict[str, Any]:
+    def deployment_preflight(
+        self, *, allow_unsafe_runtime: bool = False
+    ) -> dict[str, Any]:
         sensitive_tables = (
             "namespace",
             "namespace_grant",
@@ -1681,19 +1683,22 @@ class PostgresStore:
             "memory_schema_version",
         )
         checks: list[str] = []
+        authority_checks: list[str] = []
         with self._connection() as connection:
             role = connection.execute(
                 "SELECT r.rolsuper, r.rolbypassrls FROM pg_roles AS r "
                 "WHERE r.rolname = session_user"
             ).fetchone()
             if not role or role[0] or role[1]:
-                checks.append("runtime role is superuser or has BYPASSRLS")
+                authority_checks.append("runtime role is superuser or has BYPASSRLS")
             schema_owner = connection.execute(
                 "SELECT n.nspowner::regrole::text = session_user "
                 "FROM pg_namespace AS n WHERE n.nspname = 'durable_memory'"
             ).fetchone()
-            if not schema_owner or schema_owner[0]:
-                checks.append("runtime role owns the durable_memory schema")
+            if not schema_owner:
+                checks.append("missing durable_memory schema")
+            elif schema_owner[0]:
+                authority_checks.append("runtime role owns the durable_memory schema")
             table_rows = connection.execute(
                 "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity, "
                 "c.relowner::regrole::text = session_user "
@@ -1703,8 +1708,10 @@ class PostgresStore:
             ).fetchall()
             found = {row[0] for row in table_rows}
             for name, rls, _force_rls, owned in table_rows:
-                if (name in sensitive_tables and not rls) or owned:
+                if name in sensitive_tables and not rls:
                     checks.append(f"unsafe table configuration: {name}")
+                if owned:
+                    authority_checks.append(f"unsafe table configuration: {name}")
             for name in set(authority_tables) - found:
                 checks.append(f"missing table: {name}")
             extensions = {
@@ -1758,7 +1765,12 @@ class PostgresStore:
                 strict=True,
             ):
                 if not granted:
-                    checks.append(f"runtime role lacks {label}")
+                    target = (
+                        authority_checks
+                        if label == "apply_change_request EXECUTE revoked"
+                        else checks
+                    )
+                    target.append(f"runtime role lacks {label}")
             for table in protected_tables:
                 for privilege in ("INSERT", "UPDATE", "DELETE"):
                     granted = connection.execute(
@@ -1766,17 +1778,25 @@ class PostgresStore:
                         (f"durable_memory.{table}", privilege),
                     ).fetchone()[0]
                     if granted:
-                        checks.append(
+                        authority_checks.append(
                             f"runtime role has forbidden {privilege} on {table}"
                         )
             if connection.execute(
                 "SELECT has_function_privilege(session_user, "
                 "'durable_memory.auto_apply_change_request(uuid)', 'EXECUTE')"
             ).fetchone()[0]:
-                checks.append(
+                authority_checks.append(
                     "runtime role has forbidden EXECUTE on auto_apply_change_request"
                 )
-        return {"applicable": True, "ok": not checks, "checks": checks}
+        if not allow_unsafe_runtime:
+            checks.extend(authority_checks)
+        return {
+            "applicable": True,
+            "ok": not checks,
+            "checks": checks,
+            "unsafe_runtime": allow_unsafe_runtime,
+            "warnings": authority_checks if allow_unsafe_runtime else [],
+        }
 
     def operation_policy(self) -> ApprovalPolicy:
         with self._connection() as connection:

@@ -112,3 +112,14 @@ Production migrations are append-only. Before release, record the highest
 `durable_memory.schema_migration` version and checksums from every persistent
 environment. Never edit an applied migration; append a new version and verify
 the upgrade from the last published package state.
+
+## Explicit unsafe deployments
+
+The default runbook above uses separate roles. An operator may explicitly set
+`DURABLE_MEMORY_DANGER_ALLOW_UNSAFE_RUNTIME=true` for a single-profile deployment
+with one schema-owner/runtime role. See the README for the exception's boundaries.
+In this mode inspect both `deployment_preflight.checks` and `.warnings`; `ok`
+does not certify database-enforced isolation. Missing objects, runtime permissions,
+and policy mismatches remain blocking. Without a separate migration URL, operator
+commands reuse the runtime URL. The flag does not grant privileges or auto-approve
+writes. Restore a restricted runtime role before disabling the flag.

@@ -109,7 +109,13 @@ class DurableMemory:
         policy_mismatch = False
         try:
             store = self.store()
-            preflight = store.deployment_preflight()
+            preflight = (
+                store.deployment_preflight(
+                    allow_unsafe_runtime=self.settings.allow_unsafe_runtime
+                )
+                if isinstance(store, PostgresStore)
+                else store.deployment_preflight()
+            )
             connected = self.settings.store == "postgres"
             if isinstance(store, PostgresStore):
                 effective_policy = store.operation_policy()
@@ -137,6 +143,8 @@ class DurableMemory:
             delete=reported_policy.delete,
             postgres=t("postgres_connected" if connected else "postgres_not_connected"),
         )
+        if self.settings.store == "postgres" and self.settings.allow_unsafe_runtime:
+            message = f"{message}\n{t('unsafe_runtime_warning')}"
         if self.settings.store == "memory":
             message = f"{message}\n{t('doctor_ephemeral')}"
         if not preflight["ok"]:
@@ -995,7 +1003,10 @@ class DurableMemory:
         raise CommandError(t("unknown_action", action=command, usage=t("usage")))
 
     def _migrator(self) -> DatabaseMigrator:
-        return DatabaseMigrator(self.settings.migration_database_url or "")
+        url = self.settings.migration_database_url
+        if not url and self.settings.allow_unsafe_runtime:
+            url = self.settings.database_url
+        return DatabaseMigrator(url or "")
 
     def _migrate(self) -> dict[str, Any]:
         applied = self._migrator().migrate()

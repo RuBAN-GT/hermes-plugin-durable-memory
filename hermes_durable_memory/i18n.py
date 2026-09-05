@@ -7,6 +7,8 @@ from typing import Any
 
 _MESSAGES = {
     "en": {
+        "unsafe_runtime_invalid": "DURABLE_MEMORY_DANGER_ALLOW_UNSAFE_RUNTIME must be true or false.",
+        "unsafe_runtime_warning": "DANGER: unsafe runtime role allowed. Database privileges can bypass profile isolation and approval. Plugin writes still follow approval policy.",
         "invalid_args": "Those arguments could not be read: {error}",
         "unknown_action": "Unknown action «{action}».\n{usage}",
         "unknown_profile": "Profile «{slug}» was not found.",
@@ -134,6 +136,8 @@ _MESSAGES = {
         ),
     },
     "ru": {
+        "unsafe_runtime_invalid": "DURABLE_MEMORY_DANGER_ALLOW_UNSAFE_RUNTIME должен быть true или false.",
+        "unsafe_runtime_warning": "ОПАСНЫЙ РЕЖИМ: разрешена привилегированная роль БД. Её права позволяют обходить изоляцию профилей и согласование. Записи через плагин по-прежнему следуют политике согласования.",
         "invalid_args": "Не получилось прочитать аргументы: {error}",
         "unknown_action": "Неизвестное действие «{action}».\n{usage}",
         "unknown_profile": "Профиль «{slug}» не найден.",

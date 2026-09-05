@@ -21,6 +21,7 @@ class Settings:
     policy: ApprovalPolicy
     database_url: str | None = None
     migration_database_url: str | None = None
+    allow_unsafe_runtime: bool = False
     embedding_provider: str | None = None
     ollama_base_url: str | None = None
     ollama_model: str | None = None
@@ -48,6 +49,13 @@ class Settings:
         profile = durable_profile or hermes_profile
         if not profile:
             raise CommandError(t("profile_empty"))
+        unsafe_raw = (
+            env.get("DURABLE_MEMORY_DANGER_ALLOW_UNSAFE_RUNTIME", "false")
+            .strip()
+            .lower()
+        )
+        if unsafe_raw not in {"true", "false"}:
+            raise CommandError(t("unsafe_runtime_invalid"))
         ttl_raw = env.get("DURABLE_MEMORY_APPROVAL_TTL_SECONDS", "86400")
         try:
             ttl_seconds = int(ttl_raw)
@@ -82,6 +90,7 @@ class Settings:
         if not 0 <= embedding_max_distance <= 2:
             embedding_max_distance = 0.35
         return cls(
+            allow_unsafe_runtime=unsafe_raw == "true",
             store=store,
             profile=profile,
             policy=ApprovalPolicy(

@@ -299,6 +299,7 @@ not conflict. Never infer another profile.
 | `DURABLE_MEMORY_PROFILE` | `$HERMES_PROFILE` | Runtime profile slug |
 | `DURABLE_MEMORY_DATABASE_URL` | — | Runtime PostgreSQL URL |
 | `DURABLE_MEMORY_MIGRATION_DATABASE_URL` | — | Migrations and bootstrap only |
+| `DURABLE_MEMORY_DANGER_ALLOW_UNSAFE_RUNTIME` | `false` | Explicit unsafe single-role deployment; accepts `true` or `false` |
 | `DURABLE_MEMORY_APPROVAL_CREATE` | `require` | `require` \| `auto` \| `deny` |
 | `DURABLE_MEMORY_APPROVAL_UPDATE` | `require` | `require` \| `auto` \| `deny` |
 | `DURABLE_MEMORY_APPROVAL_DELETE` | `require` | `require` \| `auto` \| `deny` |
@@ -307,6 +308,32 @@ not conflict. Never infer another profile.
 > [!WARNING]
 > Use a separate `DURABLE_MEMORY_MIGRATION_DATABASE_URL` for migrations and
 > profile bootstrap. Never run Hermes as the migration owner or a superuser.
+
+### Explicit unsafe single-role deployment
+
+For an operator-managed single-profile deployment, set
+`DURABLE_MEMORY_DANGER_ALLOW_UNSAFE_RUNTIME=true` to allow the same PostgreSQL
+role to own the schema and run the plugin. This is an explicit exception to the
+separate-role setup above. The flag does not grant PostgreSQL privileges.
+
+With this flag, migrations and bootstrap use `DURABLE_MEMORY_DATABASE_URL` when
+no separate migration URL is set. An explicit migration URL still takes precedence.
+Provision the database and required extensions first with appropriate administrator
+privileges; the runtime role need not be a superuser if the extensions already exist.
+
+`doctor` still rejects missing schema objects/extensions, disabled RLS, missing
+required runtime grants, connectivity failures, and policy mismatches. Excessive
+role privileges, schema/table ownership, and internal-write access become entries
+in `deployment_preflight.warnings`; `unsafe_runtime` is true and the human-readable
+output always warns about the mode. `ok` in this mode means the remaining checks
+passed, not that the deployment provides database-enforced isolation.
+
+**Privileged credentials can bypass profile isolation and approval directly in
+SQL.** Plugin operations still use the approval queue and configured policy; the
+flag never switches policy to `auto`. Use one explicit profile for this setup.
+Turn the flag off and move runtime access to a restricted role to restore the
+normal security boundary. SQL migrations and existing grants are not changed by
+turning the flag on or off.
 
 Optional Ollama settings stay disabled unless every value is valid:
 
