@@ -123,3 +123,13 @@ does not certify database-enforced isolation. Missing objects, runtime permissio
 and policy mismatches remain blocking. Without a separate migration URL, operator
 commands reuse the runtime URL. The flag does not grant privileges or auto-approve
 writes. Restore a restricted runtime role before disabling the flag.
+
+## Interactive operator setup
+
+`hermes durable-memory setup` performs the same migration/bootstrap/grant checks
+before saving the explicitly selected profile. Enable the plugin once to expose
+its CLI, or use `python -m hermes_durable_memory.setup_cli` in Hermes' environment.
+See the README questionnaire workflow and file-update behavior. The wizard keeps
+operator passwords in memory only. For strict-mode later migrations, provide the
+separate migration URL temporarily or rerun setup. Setup resets approval policy to
+`require`; it is not a general-purpose policy editor or import command.

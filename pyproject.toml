@@ -30,7 +30,7 @@ classifiers = [
 dependencies = ["psycopg[binary]>=3.2,<4"]
 
 [project.optional-dependencies]
-dev = ["ruff>=0.8"]
+dev = ["ruff>=0.8", "python-dotenv>=1", "PyYAML>=6"]
 
 [project.entry-points."hermes_agent.memory_providers"]
 durable-memory = "hermes_durable_memory.memory_entrypoint:create_provider"
@@ -45,7 +45,7 @@ durable-memory = "hermes_durable_memory.general_plugin:register"
 include = ["hermes_durable_memory*"]
 
 [tool.setuptools.package-data]
-hermes_durable_memory = ["sql/*.sql"]
+hermes_durable_memory = ["sql/*.sql", "resources/*.sql"]
 
 [tool.ruff]
 line-length = 88

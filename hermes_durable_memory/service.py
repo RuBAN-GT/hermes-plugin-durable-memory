@@ -1008,6 +1008,32 @@ class DurableMemory:
             url = self.settings.database_url
         return DatabaseMigrator(url or "")
 
+    @staticmethod
+    def setup_database(plan) -> dict[str, Any]:
+        """Operator-only setup. No CLI, gateway, or profile-file side effects."""
+        import psycopg
+
+        from .setup_plan import provision_database
+
+        provision_database(plan)
+        # Verify both identities before migrations; exceptions are redacted by
+        # the interactive adapter, never printed as raw driver diagnostics.
+        for account in (plan.runtime, plan.owner):
+            with psycopg.connect(account.url) as connection:
+                user = connection.execute("SELECT session_user").fetchone()[0]
+                if user != account.user:
+                    raise CommandError(t("setup_connection_identity"))
+        settings = plan.settings()
+        migrator = DatabaseMigrator(plan.owner.url)
+        migrator.migrate()
+        migrator.bootstrap_profile(plan.profile, plan.runtime.user, settings.policy)
+        if not plan.danger:
+            migrator.grant_runtime(plan.runtime.user)
+        result = DurableMemory(settings=settings).doctor()
+        if not result["postgres_ready"]:
+            raise CommandError(t("setup_preflight_failed"))
+        return result
+
     def _migrate(self) -> dict[str, Any]:
         applied = self._migrator().migrate()
         return {

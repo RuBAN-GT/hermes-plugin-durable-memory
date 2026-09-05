@@ -119,6 +119,61 @@ The only runtime dependency beyond Hermes is the PostgreSQL driver.
 
 ---
 
+## Interactive setup
+
+After installing the package, enable its CLI once, then run the wizard:
+
+```bash
+hermes plugins enable durable-memory
+hermes durable-memory setup
+```
+
+Select the intended profile explicitly in the questionnaire, or supply it:
+
+```bash
+hermes durable-memory setup --target-profile <profile>
+hermes durable-memory setup --target-profile <profile> --danger
+```
+
+If CLI discovery is unavailable before activation, the same wizard can be run
+with `python -m hermes_durable_memory.setup_cli` in the Hermes Python environment.
+Use `--target-profile` with either entry point: Hermes consumes `--profile` as its
+own launch option before dispatching plugin commands. A custom `HERMES_HOME` is
+used directly only when `HERMES_PROFILE` explicitly matches the selection;
+otherwise the selected name goes through Hermes' profile resolver. A memory
+namespace alone is not proof of the home directory's profile identity.
+
+The wizard asks for the profile, PostgreSQL host/socket, port, database, SSL mode,
+runtime user/password, and whether to use one role for runtime and migrations.
+Strict mode asks for a separate migration owner. Optionally supply an administrator
+connection to create missing roles/database and enable `pgcrypto` and `vector`.
+PostgreSQL and pgvector binaries must already be installed on the database server.
+Existing passwords and database ownership are never changed; an existing database
+with a different owner is refused when provisioning is requested.
+
+Before applying anything, the wizard shows a password-free summary and asks for
+confirmation. It applies migrations, binds the profile, grants the documented API
+privileges in strict mode, and runs `doctor`. Only after that succeeds does it
+save runtime settings to the selected profile's `.env` and enable the plugin in
+`config.yaml`. Switching `memory.provider` is an explicit question, defaulting to
+no. Runtime credentials are stored in `.env`; administrator/migration credentials
+are not saved separately, and an existing migration URL is removed. In single-role
+mode the persisted runtime password necessarily also authorizes migrations.
+
+Setup sets all approval policies to `require` with a 24-hour pending TTL, including
+on reruns. It preserves unrelated environment bindings (including multiline values)
+and YAML settings, though YAML comments/formatting may change. Files are replaced
+atomically with mode `0600`; symbolic-link targets, malformed configuration, managed
+settings, and detected concurrent edits are refused. If config saving fails, the
+previous `.env` is restored. Database changes are not rolled back by a later file
+failure; rerun after resolving the cause. Do not edit profile files during setup.
+
+Passwords use hidden terminal input. A real interactive terminal is required;
+there are no password command-line arguments. The wizard never restarts services
+or imports existing memory. Restart the selected gateway with your process manager,
+then run `/durable-memory doctor` there. Human-decision capabilities still use
+Hermes' standard `plugins enable` consent flow; setup does not grant them silently.
+
 ## Quick start
 
 Smallest local setup: in-memory store. Useful for trying commands. Data does

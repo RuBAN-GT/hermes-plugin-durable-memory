@@ -188,6 +188,31 @@ class DatabaseMigrator:
         ).fetchone()
         return row[0] if row else None
 
+    def grant_runtime(self, runtime_role: str) -> None:
+        """Grant the documented runtime API without canonical write authority."""
+        import psycopg
+        from psycopg import sql
+
+        grants = (
+            files("hermes_durable_memory")
+            .joinpath("resources/runtime_grants.sql")
+            .read_text(encoding="utf-8")
+        )
+        with psycopg.connect(self._database_url) as connection:
+            database = connection.execute("SELECT current_database()").fetchone()[0]
+            connection.execute(
+                sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                    sql.Identifier(database), sql.Identifier(runtime_role)
+                )
+            )
+            for statement in grants.split(";"):
+                if statement.strip():
+                    connection.execute(
+                        sql.SQL(statement).format(
+                            runtime_role=sql.Identifier(runtime_role)
+                        )
+                    )
+
     @staticmethod
     def _migrations() -> list[Migration]:
         sql_dir = files("hermes_durable_memory").joinpath("sql")
