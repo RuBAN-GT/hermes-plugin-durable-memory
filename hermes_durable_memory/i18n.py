@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
+
+_LANGUAGE_OVERRIDE: ContextVar[str | None] = ContextVar(
+    "durable_memory_language_override", default=None
+)
 
 _MESSAGES = {
     "en": {
@@ -350,11 +357,21 @@ _MESSAGES = {
 
 def t(key: str, *, language: str | None = None, **values: Any) -> str:
     """Translate a plugin message using Hermes' process-wide language setting."""
-    language = language or _language()
+    language = language or _LANGUAGE_OVERRIDE.get() or _language()
     template = _MESSAGES.get(language, _MESSAGES["en"]).get(key)
     if template is None:
         template = _MESSAGES["en"][key]
     return template.format(**values)
+
+
+@contextmanager
+def force_language(language: str) -> Iterator[None]:
+    """Temporarily override the language for a CLI-only execution scope."""
+    token = _LANGUAGE_OVERRIDE.set(language)
+    try:
+        yield
+    finally:
+        _LANGUAGE_OVERRIDE.reset(token)
 
 
 def _language() -> str:

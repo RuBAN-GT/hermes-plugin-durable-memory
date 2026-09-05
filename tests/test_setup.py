@@ -601,6 +601,20 @@ class SetupCLITests(unittest.TestCase):
                 activate=True,
             )
 
+    def test_plugin_cli_forces_english_output(self):
+        output = io.StringIO()
+        args = argparse.Namespace(action="doctor")
+        memory = DurableMemory(
+            environment={
+                "DURABLE_MEMORY_STORE": "memory",
+                "DURABLE_MEMORY_PROFILE": "test",
+            }
+        )
+        with patch.dict(os.environ, {"HERMES_LANGUAGE": "ru"}), redirect_stdout(output):
+            _cli_handler(memory, args)
+        self.assertIn("Durable memory is using", output.getvalue())
+        self.assertNotIn("использует", output.getvalue())
+
     def test_noninteractive_setup_refuses_password_input(self):
         with (
             patch("sys.stdin.isatty", return_value=False),

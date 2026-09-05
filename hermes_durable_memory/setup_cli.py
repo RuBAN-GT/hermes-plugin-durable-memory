@@ -11,6 +11,7 @@ import warnings
 from dataclasses import replace
 from pathlib import Path
 
+from .i18n import force_language
 from .i18n import t as _translate
 from .models import CommandError
 from .service import DurableMemory
@@ -279,7 +280,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=t("setup_help"))
     add_setup_arguments(parser)
     args = parser.parse_args()
-    run_setup(**vars(args))
+    with force_language("en"):
+        run_setup(**vars(args))
 
 
 if __name__ == "__main__":

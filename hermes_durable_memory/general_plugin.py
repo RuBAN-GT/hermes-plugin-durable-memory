@@ -5,7 +5,7 @@ from __future__ import annotations
 import shlex
 from typing import Any
 
-from .i18n import t
+from .i18n import force_language, t
 from .models import CommandError
 from .service import DurableMemory
 
@@ -14,7 +14,7 @@ def _cli_setup(parser: Any) -> None:
     from .setup_cli import add_setup_arguments
 
     subparsers = parser.add_subparsers(dest="action", required=True)
-    setup = subparsers.add_parser("setup", help=t("setup_help"))
+    setup = subparsers.add_parser("setup", help=t("setup_help", language="en"))
     add_setup_arguments(setup)
     for action in (
         "doctor",
@@ -61,31 +61,32 @@ def _cli_setup(parser: Any) -> None:
 
 
 def _cli_handler(memory: DurableMemory, args: Any) -> None:
-    if args.action == "setup":
-        from .setup_cli import run_setup
+    with force_language("en"):
+        if args.action == "setup":
+            from .setup_cli import run_setup
 
-        run_setup(
-            profile=args.profile,
-            danger=args.danger,
-            host=args.host,
-            port=args.port,
-            database=args.database,
-            schema=args.schema,
-            sslmode=args.sslmode,
-            user=args.user,
-            provision=args.provision,
-            activate=args.activate,
-        )
-        return
-    try:
-        options = []
-        for key, value in vars(args).items():
-            if key == "action" or value is None:
-                continue
-            options.extend([f"--{key.replace('_', '-')}", str(value)])
-        print(memory.execute(shlex.join([args.action, *options])))
-    except (CommandError, OSError, ValueError) as error:
-        raise SystemExit(str(error)) from None
+            run_setup(
+                profile=args.profile,
+                danger=args.danger,
+                host=args.host,
+                port=args.port,
+                database=args.database,
+                schema=args.schema,
+                sslmode=args.sslmode,
+                user=args.user,
+                provision=args.provision,
+                activate=args.activate,
+            )
+            return
+        try:
+            options = []
+            for key, value in vars(args).items():
+                if key == "action" or value is None:
+                    continue
+                options.extend([f"--{key.replace('_', '-')}", str(value)])
+            print(memory.execute(shlex.join([args.action, *options])))
+        except (CommandError, OSError, ValueError) as error:
+            raise SystemExit(str(error)) from None
 
 
 async def _request_human_decision(
