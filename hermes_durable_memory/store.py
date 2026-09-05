@@ -1014,6 +1014,10 @@ class PostgresStore:
             self._psycopg().connect(self._database_url), self._schema
         )
 
+    def _table_reference(self, table: str) -> str:
+        """Build an internal table reference for privilege catalog functions."""
+        return f"{self._schema}.{table}"
+
     @staticmethod
     def _profile(row: tuple[Any, ...]) -> Profile:
         return Profile(id=str(row[0]), slug=row[1])
@@ -1779,7 +1783,7 @@ class PostgresStore:
                 for privilege in ("INSERT", "UPDATE", "DELETE"):
                     granted = connection.execute(
                         "SELECT has_table_privilege(session_user, %s, %s)",
-                        (f"durable_memory.{table}", privilege),
+                        (self._table_reference(table), privilege),
                     ).fetchone()[0]
                     if granted:
                         authority_checks.append(

@@ -29,6 +29,7 @@ from hermes_durable_memory.setup_plan import (
     SetupPlan,
     provision_database,
 )
+from hermes_durable_memory.store import PostgresStore
 
 
 def account(user="runtime", password="synthetic-password"):
@@ -174,6 +175,10 @@ class SetupFileTests(unittest.TestCase):
 
 
 class SetupPlanTests(unittest.TestCase):
+    def test_custom_schema_qualifies_preflight_table_references(self):
+        store = PostgresStore(account().url, "public")
+        self.assertEqual(store._table_reference("record"), "public.record")
+
     def test_schema_connection_rewrites_internal_sql(self):
         from unittest.mock import Mock
 
