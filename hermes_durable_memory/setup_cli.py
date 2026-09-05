@@ -26,11 +26,23 @@ def t(key: str, **values: object) -> str:
 def _database_failure(error: Exception) -> str:
     """Return actionable database diagnostics without exposing connection details."""
     sqlstate = str(getattr(error, "sqlstate", "") or "")
+    error_type = type(error).__name__
     detail = (
-        f"{type(error).__name__}; the connection failed before PostgreSQL returned "
-        "an error code. Check that the server is reachable and accepts the selected "
-        "role."
+        f"{error_type}; the connection failed before PostgreSQL returned an error "
+        "code. Check that the server is reachable and accepts the selected role."
     )
+    local_hints = {
+        "ImportError": "The active Hermes Python environment is missing a required "
+        "module. Install psycopg[binary] in that environment, then restart the "
+        "gateway.",
+        "ModuleNotFoundError": "The active Hermes Python environment is missing a "
+        "required module. Install psycopg[binary] in that environment, then restart "
+        "the gateway.",
+        "OperationalError": "The PostgreSQL driver could not complete its connection "
+        "handshake. Check host, port, database, role, password, and TLS settings.",
+    }
+    if hint := local_hints.get(error_type):
+        detail = f"{error_type}. {hint}"
     if sqlstate:
         detail = f"PostgreSQL SQLSTATE {sqlstate}"
     hints = {

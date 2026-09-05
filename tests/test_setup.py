@@ -482,6 +482,14 @@ class SetupCLITests(unittest.TestCase):
             )
             self.assertNotIn("secret-never-print", output)
 
+    def test_missing_database_driver_names_the_required_dependency(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output, _ = self.invoke(
+                Path(tmp), failure=ModuleNotFoundError("secret-never-print")
+            )
+            self.assertIn("Install psycopg[binary]", output)
+            self.assertNotIn("secret-never-print", output)
+
     def test_database_error_reports_a_safe_postgresql_code(self):
         class DatabaseError(RuntimeError):
             sqlstate = "0A000"
