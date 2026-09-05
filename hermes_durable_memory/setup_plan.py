@@ -7,9 +7,14 @@ from dataclasses import dataclass
 from urllib.parse import quote
 
 from .config import Settings
-from .i18n import t
+from .i18n import t as _translate
 from .models import CommandError
 from .policies import ApprovalPolicy
+
+
+def t(key: str, **values: object) -> str:
+    """Keep standalone setup diagnostics in English."""
+    return _translate(key, language="en", **values)
 
 
 @dataclass(frozen=True, repr=False)

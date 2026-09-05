@@ -437,6 +437,27 @@ class SetupCLITests(unittest.TestCase):
             self.assertEqual(list(home.iterdir()), [])
             self.assertNotIn("secret-never-print", output)
 
+    def test_database_error_reports_a_safe_postgresql_code(self):
+        class DatabaseError(RuntimeError):
+            sqlstate = "0A000"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output, _ = self.invoke(
+                Path(tmp), failure=DatabaseError("secret-never-print")
+            )
+            self.assertIn("PostgreSQL SQLSTATE 0A000", output)
+            self.assertIn("install pgvector", output)
+            self.assertNotIn("secret-never-print", output)
+
+    def test_setup_text_is_english_when_gateway_language_is_russian(self):
+        with patch.dict(os.environ, {"HERMES_LANGUAGE": "ru"}):
+            self.assertEqual(
+                __import__("hermes_durable_memory.setup_cli", fromlist=["t"]).t(
+                    "setup_profile"
+                ),
+                "Hermes profile",
+            )
+
     def test_setup_dispatches_without_reading_unconfigured_settings(self):
         parser = argparse.ArgumentParser()
         _cli_setup(parser)

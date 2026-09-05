@@ -1022,7 +1022,7 @@ class DurableMemory:
             with psycopg.connect(account.url) as connection:
                 user = connection.execute("SELECT session_user").fetchone()[0]
                 if user != account.user:
-                    raise CommandError(t("setup_connection_identity"))
+                    raise CommandError(t("setup_connection_identity", language="en"))
         settings = plan.settings()
         migrator = DatabaseMigrator(plan.owner.url)
         migrator.migrate()
@@ -1031,7 +1031,7 @@ class DurableMemory:
             migrator.grant_runtime(plan.runtime.user)
         result = DurableMemory(settings=settings).doctor()
         if not result["postgres_ready"]:
-            raise CommandError(t("setup_preflight_failed"))
+            raise CommandError(t("setup_preflight_failed", language="en"))
         return result
 
     def _migrate(self) -> dict[str, Any]:

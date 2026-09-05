@@ -346,9 +346,9 @@ _MESSAGES = {
 }
 
 
-def t(key: str, **values: Any) -> str:
+def t(key: str, *, language: str | None = None, **values: Any) -> str:
     """Translate a plugin message using Hermes' process-wide language setting."""
-    language = _language()
+    language = language or _language()
     template = _MESSAGES.get(language, _MESSAGES["en"]).get(key)
     if template is None:
         template = _MESSAGES["en"][key]

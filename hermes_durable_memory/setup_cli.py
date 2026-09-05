@@ -11,11 +11,42 @@ import warnings
 from dataclasses import replace
 from pathlib import Path
 
-from .i18n import t
+from .i18n import t as _translate
 from .models import CommandError
 from .service import DurableMemory
 from .setup_files import ProfileFiles
 from .setup_plan import ConnectionInput, SetupPlan
+
+
+def t(key: str, **values: object) -> str:
+    """Keep standalone operator setup independent of the gateway UI language."""
+    return _translate(key, language="en", **values)
+
+
+def _database_failure(error: Exception) -> str:
+    """Return actionable database diagnostics without exposing connection details."""
+    sqlstate = str(getattr(error, "sqlstate", "") or "")
+    detail = "no PostgreSQL error code was returned"
+    if sqlstate:
+        detail = f"PostgreSQL SQLSTATE {sqlstate}"
+    hints = {
+        "08001": "Check that PostgreSQL is reachable at the selected host and port.",
+        "08004": "Check the server authentication and connection policy.",
+        "08006": "The PostgreSQL connection was lost; check the server logs.",
+        "0A000": "If this occurred while enabling extensions, install pgvector on the PostgreSQL server.",
+        "28000": "Check that the selected database role is allowed to connect.",
+        "28P01": "Check the password or external authentication for the selected role.",
+        "3D000": "The selected database does not exist; enable provisioning or create it first.",
+        "42501": "The selected role lacks a required PostgreSQL privilege.",
+        "57P03": "PostgreSQL is starting or does not yet accept connections.",
+    }
+    hint = hints.get(sqlstate)
+    if hint:
+        detail = f"{detail}. {hint}"
+    return (
+        f"Database setup failed while preparing or checking the database ({detail}). "
+        "Profile files were not saved. Database changes may have completed."
+    )
 
 
 def _ask(key: str, default: str = "") -> str:
@@ -169,12 +200,15 @@ def run_setup(*, profile: str | None = None, danger: bool = False) -> None:
     except (KeyboardInterrupt, EOFError):
         raise SystemExit(t("setup_interrupted", stage=t(stage))) from None
     except CommandError as error:
-        # Only our controlled, translated setup diagnostics can reach here.
-        # DatabaseMigrator may carry database identifiers; redact those too.
         if stage == "setup_stage_database":
-            raise SystemExit(t("setup_failed", stage=t(stage))) from None
+            raise SystemExit(
+                "Database setup failed while preparing or checking the database: "
+                f"{str(error)} Profile files were not saved."
+            ) from None
         raise SystemExit(str(error)) from None
-    except Exception:
+    except Exception as error:
+        if stage == "setup_stage_database":
+            raise SystemExit(_database_failure(error)) from None
         raise SystemExit(t("setup_failed", stage=t(stage))) from None
 
 
