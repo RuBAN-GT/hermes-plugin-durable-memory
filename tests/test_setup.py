@@ -435,6 +435,9 @@ class SetupCLITests(unittest.TestCase):
             )
             database.assert_called_once()
             self.assertEqual(list(home.iterdir()), [])
+            self.assertIn(
+                "RuntimeError; the connection failed before PostgreSQL", output
+            )
             self.assertNotIn("secret-never-print", output)
 
     def test_database_error_reports_a_safe_postgresql_code(self):

@@ -26,7 +26,11 @@ def t(key: str, **values: object) -> str:
 def _database_failure(error: Exception) -> str:
     """Return actionable database diagnostics without exposing connection details."""
     sqlstate = str(getattr(error, "sqlstate", "") or "")
-    detail = "no PostgreSQL error code was returned"
+    detail = (
+        f"{type(error).__name__}; the connection failed before PostgreSQL returned "
+        "an error code. Check that the server is reachable and accepts the selected "
+        "role."
+    )
     if sqlstate:
         detail = f"PostgreSQL SQLSTATE {sqlstate}"
     hints = {
