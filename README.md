@@ -230,6 +230,14 @@ hermes durable-memory migrate
 hermes durable-memory migration-status
 ```
 
+After every migration, rerun `bootstrap-profile` as the migration owner for
+each runtime profile. Set that profile's configured
+`DURABLE_MEMORY_APPROVAL_CREATE`, `DURABLE_MEMORY_APPROVAL_UPDATE`,
+`DURABLE_MEMORY_APPROVAL_DELETE`, and
+`DURABLE_MEMORY_APPROVAL_TTL_SECONDS` values first. Migration backfills are
+fail-safe (`require` with a 24-hour TTL); bootstrap is the required step that
+reconciles the database policy with the runtime configuration.
+
 For production, create separate migration-owner and profile-runtime roles. Run
 `bootstrap-profile` as the migration owner, then grant the runtime role only
 the application privileges it needs. Run this once per runtime role:
@@ -247,11 +255,18 @@ GRANT SELECT, INSERT ON durable_memory.candidate_record_relation TO <runtime-rol
 GRANT SELECT ON durable_memory.record, durable_memory.record_revision,
   durable_memory.change_request TO <runtime-role>;
 GRANT EXECUTE ON FUNCTION durable_memory.submit_change_request(
-  uuid, uuid, text, text, text, jsonb, text, integer, timestamptz, timestamptz, text)
+  uuid, uuid, text, text, text, jsonb, text, integer, timestamptz, timestamptz,
+  text, text)
   TO <runtime-role>;
 GRANT EXECUTE ON FUNCTION durable_memory.decide_change_request(uuid, text)
   TO <runtime-role>;
 GRANT EXECUTE ON FUNCTION durable_memory.proposal_record(uuid)
+  TO <runtime-role>;
+GRANT EXECUTE ON FUNCTION durable_memory.current_operation_policy()
+  TO <runtime-role>;
+GRANT EXECUTE ON FUNCTION durable_memory.save_import_checkpoint(
+  text, text, text, jsonb) TO <runtime-role>;
+GRANT EXECUTE ON FUNCTION durable_memory.load_import_checkpoint(text, text)
   TO <runtime-role>;
 GRANT EXECUTE ON FUNCTION durable_memory.proposal_inventory_definition(uuid, text)
   TO <runtime-role>; -- proposer-only schema validation lookup
@@ -290,8 +305,10 @@ records to `expired`; it requires approval capability and never deletes data.
 
 `DurableMemory.doctor()` includes PostgreSQL deployment preflight. It rejects a
 runtime superuser, `BYPASSRLS`, schema/table ownership, missing RLS, dangerous
-canonical-table or internal-function grants, required extensions/functions, or schema usage. It does not expose connection
-URLs or credentials. For in-memory storage it reports not applicable.
+canonical-table or internal-function grants, missing checkpoint-table RLS or
+checkpoint-function privileges, required extensions/functions, or schema usage.
+It does not expose connection URLs or credentials. For in-memory storage it
+reports not applicable.
 
 ## Commands
 
@@ -310,6 +327,12 @@ hermes durable-memory <action> [options]
 | `search` | Bounded hybrid retrieval with FTS fallback, type, namespace, and JSON filters |
 | `propose` | Create, update, or delete through approval policy |
 | `pending` / `approve` / `reject` | Review and resolve change requests |
+
+For `propose --operation update`, the default `--replace false` applies the
+payload as a merge patch and preserves omitted fields. Use `--replace true`
+only when the submitted payload is the complete replacement; omitted fields
+are removed. The corresponding structured API field is `replace` (boolean),
+which is persisted internally as `update_mode` (`patch` or `replace`).
 
 ## Approvals
 
