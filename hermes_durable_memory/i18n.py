@@ -43,12 +43,14 @@ _MESSAGES = {
         "usage_search": "Search like this: /durable-memory search --query <text>",
         "usage_create_namespace": "Create a namespace like this: /durable-memory create-namespace --slug <name> --kind shared",
         "usage_grant": "Grant access like this: /durable-memory grant --namespace <name> --profile <name> --capability read",
-        "usage_propose": "Propose a change like this: /durable-memory propose --operation create --type fact --identity <key> --text <text>",
+        "usage_propose": "Propose a change like this: /durable-memory propose --operation create --type fact --identity <key> --text <text> [--replace true|false]",
         "usage_create_identity": "Creating a record needs --identity.",
         "usage_decide": "Use /durable-memory {command} --request-id <id>",
         "namespace_required": "Specify --namespace <name>.",
         "expected_revision_int": "--expected-revision must be a number.",
         "replace_bool": "--replace must be true or false.",
+        "ranked_cursor_unsupported": "Ranked text search does not support cursors without an explicit schema sort.",
+        "schema_search_namespace_required": "Schema filters and sorting require an explicit namespace.",
         "identity_immutable": "A record identity cannot be changed or removed.",
         "unexpected_argument": "Unexpected argument: {token}",
         "option_duplicate": "Option specified more than once: {token}",
@@ -125,7 +127,7 @@ _MESSAGES = {
             "  /durable-memory create-namespace --slug <name> --kind shared\n"
             "  /durable-memory grant --namespace <name> --profile <name> --capability read|propose|approve|admin\n"
             "  /durable-memory search --query <text> [--namespace <name>]\n"
-            "  /durable-memory propose --operation create|update|delete --type <type> --identity <key> --text <text> [--namespace <name>] [--record-id <id>]\n"
+            "  /durable-memory propose --operation create|update|delete --type <type> --identity <key> --text <text> [--namespace <name>] [--record-id <id>] [--replace true|false]\n"
             "  /durable-memory pending\n"
             "  /durable-memory approve --request-id <id>\n"
             "  /durable-memory reject --request-id <id>"
@@ -167,12 +169,14 @@ _MESSAGES = {
         "usage_search": "Поиск: /durable-memory search --query <текст>",
         "usage_create_namespace": "Создание пространства: /durable-memory create-namespace --slug <имя> --kind shared",
         "usage_grant": "Выдача доступа: /durable-memory grant --namespace <имя> --profile <имя> --capability read",
-        "usage_propose": "Предложение изменения: /durable-memory propose --operation create --type fact --identity <ключ> --text <текст>",
+        "usage_propose": "Предложение изменения: /durable-memory propose --operation create --type fact --identity <ключ> --text <текст> [--replace true|false]",
         "usage_create_identity": "Для создания записи нужен --identity.",
         "usage_decide": "Используйте /durable-memory {command} --request-id <id>",
         "namespace_required": "Укажите --namespace <имя>.",
         "expected_revision_int": "--expected-revision должен быть числом.",
         "replace_bool": "--replace должен быть true или false.",
+        "ranked_cursor_unsupported": "Ранжированный текстовый поиск не поддерживает курсоры без явной сортировки по схеме.",
+        "schema_search_namespace_required": "Фильтры и сортировка по схеме требуют явного пространства.",
         "identity_immutable": "Идентификатор записи нельзя изменить или удалить.",
         "unexpected_argument": "Неожиданный аргумент: {token}",
         "option_duplicate": "Параметр указан больше одного раза: {token}",
@@ -249,7 +253,7 @@ _MESSAGES = {
             "  /durable-memory create-namespace --slug <имя> --kind shared\n"
             "  /durable-memory grant --namespace <имя> --profile <имя> --capability read|propose|approve|admin\n"
             "  /durable-memory search --query <текст> [--namespace <имя>]\n"
-            "  /durable-memory propose --operation create|update|delete --type <тип> --identity <ключ> --text <текст> [--namespace <имя>] [--record-id <id>]\n"
+            "  /durable-memory propose --operation create|update|delete --type <тип> --identity <ключ> --text <текст> [--namespace <имя>] [--record-id <id>] [--replace true|false]\n"
             "  /durable-memory pending\n"
             "  /durable-memory approve --request-id <id>\n"
             "  /durable-memory reject --request-id <id>"
