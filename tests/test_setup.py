@@ -509,6 +509,7 @@ class SetupCLITests(unittest.TestCase):
                 Path(tmp), failure=ModuleNotFoundError("secret-never-print")
             )
             self.assertIn("Install psycopg[binary]", output)
+            self.assertIn("Python executable:", output)
             self.assertNotIn("secret-never-print", output)
 
     def test_database_error_reports_a_safe_postgresql_code(self):

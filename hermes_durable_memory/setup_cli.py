@@ -31,13 +31,14 @@ def _database_failure(error: Exception) -> str:
         f"{error_type}; the connection failed before PostgreSQL returned an error "
         "code. Check that the server is reachable and accepts the selected role."
     )
+    missing_driver_hint = (
+        "The active Hermes Python environment is missing a required module. "
+        f"Python executable: {sys.executable}. Install psycopg[binary] in that "
+        "environment, then restart the gateway."
+    )
     local_hints = {
-        "ImportError": "The active Hermes Python environment is missing a required "
-        "module. Install psycopg[binary] in that environment, then restart the "
-        "gateway.",
-        "ModuleNotFoundError": "The active Hermes Python environment is missing a "
-        "required module. Install psycopg[binary] in that environment, then restart "
-        "the gateway.",
+        "ImportError": missing_driver_hint,
+        "ModuleNotFoundError": missing_driver_hint,
         "OperationalError": "The PostgreSQL driver could not complete its connection "
         "handshake. Check host, port, database, role, password, and TLS settings.",
     }
